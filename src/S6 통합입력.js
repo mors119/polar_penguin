@@ -176,26 +176,12 @@ function runInputBusiness_(type, file, outputFolder) {
   if (!result.picking.지시번호) throw new Error('재고 예약 뒤 피킹지시를 만들지 못했습니다.');
   try {
     result.pdf = S9_피킹PDF생성(result.picking.지시번호, outputFolder);
-    markPickingOutputState_(result.picking.지시번호, ENUM.헤더상태.대기);
-    markOrdersReady_(result.confirm.준비주문);
   } catch (e) {
     markPickingOutputState_(result.picking.지시번호, ENUM.헤더상태.출력오류);
     writeOpLog_('runInputBusiness_', '실패', result.picking.지시번호 + ' / PDF / ' + e.message);
     throw e;
   }
   return result;
-}
-
-/** PDF가 확인된 뒤에만 주문을 창고 작업 가능 상태로 전환한다. */
-function markOrdersReady_(orderNos) {
-  var target = {};
-  (orderNos || []).forEach(function (no) { target[toStr_(no)] = true; });
-  var table = readTable_(ROLE.주문);
-  var cNo = col_(table, COL.주문번호, true), cState = col_(table, COL.주문상태, true);
-  table.rows.forEach(function (row) {
-    if (target[toStr_(row[cNo])] && toStr_(row[cState]) === ENUM.주문상태.예약) row[cState] = ENUM.주문상태.처리완료;
-  });
-  if (table.rows.length) writeColumn_(table.sheet, cState, table.rows);
 }
 
 function markPickingOutputState_(instructionNo, state) {
@@ -297,7 +283,7 @@ function inputError_(code, message, type, fingerprint) {
 
 function inputBusinessMessage_(result) {
   var picking = result && result.picking;
-  if (picking && picking.지시번호) return '피킹지시 ' + picking.지시번호 + ' / PDF 준비 완료';
+  if (picking && picking.지시번호) return '피킹지시 ' + picking.지시번호 + ' / 출고 처리 완료';
   if (result && result.confirm && result.confirm.예약) return '주문 입력 완료 / 예약 ' + result.confirm.예약 + '건';
   return '입력 처리 완료';
 }

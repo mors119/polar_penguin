@@ -5,16 +5,9 @@
  *  피킹헤더와 피킹라인을 현장 작업용 지시서로 구성한다. 메뉴에서는 작업자에게
  *  미배정 슬롯을 배정해 인쇄하고, 통합 Input은 새 피킹 배치만 PDF로 보존한다.
  *
- *  흐름
- *   ① 작업자가 「작업지시서 출력」을 연다
- *   ② 이름을 입력하고 가져갈 슬롯 수를 고른다
- *   ③ 미배정 슬롯이 그 이름으로 배정되고 인쇄 화면이 뜬다
- *   ④ 종이에 손으로 O/X를 적으며 창고를 돈다
- *   ⑤ 돌아와서 피킹(라인) 시트에 옮겨 적는다
- *
- *  ③에서 헤더의 피킹담당자가 채워지므로,
- *  S5가 라인의 담당자 칸까지 자동으로 채운다.
- *  현장에서 한 품목이라도 X이면 S5가 부분 출고하지 않고 주문 전체를 취소한다.
+ *  PDF 파일 생성 또는 수동 인쇄 화면 준비가 성공한 시점이 fulfillment commit이다.
+ *  이때 공용 finalizer가 예약재고를 소진하고 라인/헤더/주문을 자동 완료한다.
+ *  이후 문제는 주문 취소 메뉴에서 주문번호 단위로 복원한다.
  * ============================================================
  */
 
@@ -88,7 +81,8 @@ function S9_지시서생성(이름, 개수, options) {
     var 내슬롯 = [];
     헤더.rows.forEach(function (r, i) {
       var 상태 = toStr_(r[H.상태]);
-      if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.취소) return;
+      if (상태 === ENUM.헤더상태.취소) return;
+      if (상태 === ENUM.헤더상태.완료 && !(options.readOnly && options.지시번호)) return;
       if (options.지시번호 && toStr_(r[H.지시]) !== String(options.지시번호)) return;
       if (options.readOnly || toStr_(r[H.담당]) === 이름) 내슬롯.push(i);
     });
@@ -150,7 +144,7 @@ function S9_지시서생성(이름, 개수, options) {
     라인.rows.forEach(function (r) {
       var no = 품목별_주문[toStr_(r[L.품목별])];
       if (!no) return;
-      if (toStr_(r[L.라인상태]) !== ENUM.라인상태.미처리) return;   // 이미 처리된 건 뺀다
+      if (toStr_(r[L.라인상태]) === ENUM.라인상태.취소) return;
       (주문별라인[no] = 주문별라인[no] || []).push({
         순번: toNum_(r[L.순번]),
         위치: toStr_(r[L.보관위치]) || '(위치 미지정)',
@@ -181,6 +175,19 @@ function S9_지시서생성(이름, 개수, options) {
       return { 오류: '출력할 품목이 없습니다. 배정된 슬롯이 모두 처리되었습니다.' };
     }
 
+    var finalizations = [];
+    if (!options.readOnly) {
+      var instructions = {};
+      내슬롯.forEach(function (idx) {
+        var instructionNo = toStr_(헤더.rows[idx][H.지시]);
+        (instructions[instructionNo] = instructions[instructionNo] || []).push(toStr_(헤더.rows[idx][H.주문]));
+      });
+      Object.keys(instructions).filter(String).forEach(function (instructionNo) {
+        finalizations.push(finalizePickingAfterOutput_(instructionNo,
+          { refresh: false, source: 'MANUAL_OUTPUT', orderNos: instructions[instructionNo] }));
+      });
+      try { D0_대시보드전체갱신(true); } catch (ignore) { }
+    }
     writeOpLog_('S9_지시서생성', '성공', 이름 + ' / 슬롯 ' + 슬롯목록.length + '개 / 신규배정 ' + 신규배정);
 
     return {
@@ -189,7 +196,8 @@ function S9_지시서생성(이름, 개수, options) {
       신규배정: 신규배정,
       슬롯: 슬롯목록,
       총품목: 슬롯목록.reduce(function (a, s) { return a + s.품목수; }, 0),
-      총수량: 슬롯목록.reduce(function (a, s) { return a + s.총수량; }, 0)
+      총수량: 슬롯목록.reduce(function (a, s) { return a + s.총수량; }, 0),
+      출고확정: finalizations
     };
   });
 }
@@ -209,7 +217,8 @@ function S9_피킹PDF생성(지시번호, outputRoot) {
 
   var fileName = String(지시번호) + '.pdf';
   if (S9_findPDF_(outputRoot, fileName)) {
-    return { 생성: false, 재사용: true, 파일명: fileName };
+    return { 생성: false, 재사용: true, 파일명: fileName,
+      출고확정: finalizePickingAfterOutput_(지시번호, { refresh: false, source: 'PDF_REUSE' }) };
   }
   var dateName = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
   var dateFolder = getOrCreateSubFolder_(outputRoot, dateName);
@@ -219,8 +228,9 @@ function S9_피킹PDF생성(지시번호, outputRoot) {
   var html = S9_PDFHTML_(data, 지시번호);
   var pdf = HtmlService.createHtmlOutput(html).getBlob().getAs(MimeType.PDF).setName(fileName);
   var file = dateFolder.createFile(pdf);
+  var finalization = finalizePickingAfterOutput_(지시번호, { refresh: false, source: 'PDF_OUTPUT' });
   writeOpLog_('S9_피킹PDF생성', '성공', fileName);
-  return { 생성: true, 파일ID: file.getId(), 파일명: fileName };
+  return { 생성: true, 파일ID: file.getId(), 파일명: fileName, 출고확정: finalization };
 }
 
 /** 출력오류 또는 누락 PDF를 같은 지시번호로 복구한다. 재고와 피킹행은 만들지 않는다. */
@@ -231,8 +241,7 @@ function S9_피킹PDF재시도(지시번호) {
   if (!orders.length) throw new Error('피킹지시번호를 찾을 수 없습니다: ' + 지시번호);
   try {
     var result = S9_피킹PDF생성(지시번호, inputFolder_('Output폴더ID'));
-    markPickingOutputState_(지시번호, ENUM.헤더상태.대기);
-    markOrdersReady_(orders); D0_대시보드전체갱신(true);
+    D0_대시보드전체갱신(true);
     return { 메시지: (result.재사용 ? '기존 PDF를 확인했습니다.' : 'PDF를 다시 생성했습니다.') + ' ' + 지시번호 };
   } catch (e) {
     markPickingOutputState_(지시번호, ENUM.헤더상태.출력오류); throw e;
@@ -263,12 +272,12 @@ function S9_PDFHTML_(data, 지시번호) {
     '<p>생성 ', S9_escapeHtml_(data.출력시각), ' · 슬롯 ', data.슬롯.length, '개 · 총 ', data.총수량, '개</p>'];
   data.슬롯.forEach(function (slot) {
     parts.push('<h2>카트 슬롯 ', slot.슬롯, ' · ', S9_escapeHtml_(slot.주문번호), '</h2>',
-      '<table><tr><th>No</th><th>보관위치</th><th>상품코드</th><th>상품명 / 옵션</th><th>수량</th><th>O/X</th><th>사유</th></tr>');
+      '<table><tr><th>No</th><th>보관위치</th><th>상품코드</th><th>상품명 / 옵션</th><th>수량</th></tr>');
     slot.품목.forEach(function (item) {
       parts.push('<tr><td>', item.순번, '</td><td class="loc">', S9_escapeHtml_(item.위치),
         '</td><td>', S9_escapeHtml_(item.코드), '</td><td>', S9_escapeHtml_(item.상품명),
         item.옵션 ? ' / ' + S9_escapeHtml_(item.옵션) : '', '</td><td class="qty">', item.수량,
-        '</td><td></td><td></td></tr>');
+        '</td></tr>');
     });
     parts.push('</table>');
   });
@@ -310,8 +319,6 @@ function 작업지시서_HTML_() {
 '  td { padding: 7px 6px; border: 1px solid #D6DCE4; }',
 '  .loc { font-weight: bold; font-size: 15px; font-family: Consolas, monospace; }',
 '  .qty { text-align: center; font-weight: bold; font-size: 16px; }',
-'  .chk { width: 46px; text-align: center; }',
-'  .memo { width: 90px; }',
 '  .hdr { border-bottom: 3px solid #1F3864; padding-bottom: 8px; margin-bottom: 14px; }',
 '  .hdr h1 { margin: 0; font-size: 21px; }',
 '  .hdr .meta { font-size: 13px; color: #555; margin-top: 4px; }',
@@ -384,7 +391,7 @@ function 작업지시서_HTML_() {
 '  h += "<div class=\\"meta\\">작업자 <b>"+esc(r.이름)+"</b>";',
 '  h += " &nbsp;·&nbsp; 출력 "+esc(r.출력시각);',
 '  h += " &nbsp;·&nbsp; 슬롯 "+r.슬롯.length+"개 &nbsp;·&nbsp; 품목 "+r.총품목+"종 &nbsp;·&nbsp; 총 "+r.총수량+"개</div></div>";',
-'  h += "<div class=\\"note\\">※ 한 슬롯 안에서 하나라도 문제가 생기면 그 주문 전체가 취소됩니다. 나머지 품목은 집지 마세요.</div>";',
+'  h += "<div class=\\"note\\">※ 출력 준비와 동시에 출고 처리됩니다. 문제가 있으면 주문 전체 취소로 재고를 복원하세요.</div>";',
 '',
 '  r.슬롯.forEach(function(s){',
 '    h += "<div class=\\"slot\\"><div class=\\"slothead\\">";',
@@ -393,13 +400,13 @@ function 작업지시서_HTML_() {
 '    h += "</div><table><tr>";',
 '    h += "<th style=\\"width:38px\\">No</th><th style=\\"width:100px\\">보관위치</th>";',
 '    h += "<th style=\\"width:115px\\">상품코드</th><th>상품명 / 옵션</th>";',
-'    h += "<th style=\\"width:52px\\">수량</th><th class=\\"chk\\">O/X</th><th class=\\"memo\\">사유</th></tr>";',
+'    h += "<th style=\\"width:52px\\">수량</th></tr>";',
 '    s.품목.forEach(function(it){',
 '      h += "<tr><td style=\\"text-align:center\\">"+it.순번+"</td>";',
 '      h += "<td class=\\"loc\\">"+esc(it.위치)+"</td>";',
 '      h += "<td style=\\"font-family:Consolas,monospace;font-size:12px\\">"+esc(it.코드)+"</td>";',
 '      h += "<td>"+esc(it.상품명)+(it.옵션?" <span style=\\"color:#666\\">/ "+esc(it.옵션)+"</span>":"")+"</td>";',
-'      h += "<td class=\\"qty\\">"+it.수량+"</td><td class=\\"chk\\"></td><td class=\\"memo\\"></td></tr>";',
+'      h += "<td class=\\"qty\\">"+it.수량+"</td></tr>";',
 '    });',
 '    h += "</table></div>";',
 '  });',

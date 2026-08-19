@@ -9,7 +9,6 @@ const context = vm.createContext({ console });
 for (const file of ['S0 공통.js', 'S6 통합입력.js']) {
   vm.runInContext(fs.readFileSync(path.join(rootPath, 'src', file), 'utf8'), context);
 }
-const originalMarkOrdersReady = context.markOrdersReady_;
 const originalMarkPickingOutputState = context.markPickingOutputState_;
 
 function plain(value) { return JSON.parse(JSON.stringify(value)); }
@@ -59,19 +58,16 @@ test('successful checksum detection prevents the same file content from being pr
   assert.equal(context.hasProcessedFingerprint_('different-checksum'), false);
 });
 
-test('order flow reserves, creates picking/PDF, and marks ready only after PDF success', () => {
+test('order flow reserves and reaches fulfillment through successful PDF output', () => {
   const calls = [];
   context.S2_1_주문CSV취입 = () => { calls.push('S2'); return { 신규: 1, 주문번호: ['O-1'] }; };
   context.S1_1_카페24재고동기화 = () => { calls.push('S1'); };
   context.S3_1_주문확정 = () => { calls.push('S3'); return { 준비: 1, 예약: 0, 준비주문: ['O-1'] }; };
   context.S4_1_피킹지시생성 = () => { calls.push('S4'); return { 생성: true, 지시번호: 'PK-1' }; };
-  context.S9_피킹PDF생성 = () => { calls.push('S9'); return { 생성: true }; };
-  context.markPickingOutputState_ = () => { calls.push('HEADER'); };
-  context.markOrdersReady_ = () => { calls.push('READY'); };
+  context.S9_피킹PDF생성 = () => { calls.push('S9_FINALIZE'); return { 생성: true, 출고확정: { 완료주문: ['O-1'] } }; };
   context.runInputBusiness_('ORDER', {}, {});
-  assert.deepEqual(calls, ['S2', 'S3', 'S4', 'S9', 'HEADER', 'READY']);
+  assert.deepEqual(calls, ['S2', 'S3', 'S4', 'S9_FINALIZE']);
   context.markPickingOutputState_ = originalMarkPickingOutputState;
-  context.markOrdersReady_ = originalMarkOrdersReady;
 });
 
 test('inventory flow synchronizes stock but never releases reservation orders', () => {
@@ -93,33 +89,17 @@ test('reservation is a successful order result without picking or PDF', () => {
   assert.deepEqual(calls, []);
 });
 
-test('PDF failure records output error and never marks order ready', () => {
+test('PDF failure records output error and never finalizes shipment', () => {
   const calls = [];
   context.S2_1_주문CSV취입 = () => ({ 신규: 1, 주문번호: ['O-1'] });
   context.S3_1_주문확정 = () => ({ 준비: 1, 예약: 0, 준비주문: ['O-1'] });
   context.S4_1_피킹지시생성 = () => ({ 생성: true, 지시번호: 'PK-1' });
   context.S9_피킹PDF생성 = () => { throw new Error('render failed'); };
   context.markPickingOutputState_ = (no, state) => calls.push(state);
-  context.markOrdersReady_ = () => calls.push('READY');
   context.writeOpLog_ = () => {};
   assert.throws(() => context.runInputBusiness_('ORDER', {}, {}), /render failed/);
   assert.deepEqual(calls, ['출력오류']);
   context.markPickingOutputState_ = originalMarkPickingOutputState;
-  context.markOrdersReady_ = originalMarkOrdersReady;
-});
-
-test('PDF retry only promotes reservation and never downgrades shipped or cancelled orders', () => {
-  const headers = ['주문번호', '주문상태'];
-  const rows = [['O-1', '예약'], ['O-2', '출고완료'], ['O-3', '취소']];
-  const table = {
-    role: '주문(완료)', headers, rows, width: 2,
-    headerIndex: Object.fromEntries(headers.map((header, index) => [context.normKey_(header), index])),
-    sheet: { getRange: () => ({ setValues() {} }) }
-  };
-  context.readTable_ = () => table;
-  context.writeColumn_ = () => {};
-  context.markOrdersReady_(['O-1', 'O-2', 'O-3']);
-  assert.deepEqual(rows.map((row) => row[1]), ['처리완료', '출고완료', '취소']);
 });
 
 test('unsupported and corrupt files receive stable validation error codes', () => {

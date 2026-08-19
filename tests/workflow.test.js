@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const context = vm.createContext({ console });
-for (const file of ['S0 공통.js', 'S3 주문확정.js', 'S4 피킹지시생성.js', 'S5 결과반영.js', 'S7 주문취소.js']) {
+for (const file of ['S0 공통.js', 'S3 주문확정.js', 'S4 피킹지시생성.js', 'S5 결과반영.js', 'S7 주문취소.js', 'S9 작업지시서.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, 'src', file), 'utf8'), context);
 }
 
@@ -102,39 +102,71 @@ test('reservation picking batches use the RES batch-number segment', () => {
   assert.equal(context.nextInstructionNo_(header, 0, ''), 'PK-20260819-001');
 });
 
-function pickingTables(confirmations) {
+function pickingTables() {
   return {
     [context.ROLE.주문]: table(context.ROLE.주문,
-      ['주문번호', '품목별 주문번호', '주문상태', '출고완료'],
-      [['O-1', 'I-1', '처리완료', 0], ['O-1', 'I-2', '처리완료', 0]]),
+      ['주문번호', '품목별 주문번호', '상품품목코드', '수량', '주문상태', '출고완료', '피킹지시번호', '확정일시', '대기사유'],
+      [['O-1', 'I-1', 'SKU-1', 4, '예약', 0, 'PK-1', new Date(), ''],
+       ['O-1', 'I-2', 'SKU-1', 6, '예약', 0, 'PK-1', new Date(), '']]),
     [context.ROLE.라인]: table(context.ROLE.라인,
       ['주문번호', '품목별 주문번호', '상품코드', '필요수량', '확인', '실제수량', '예외사유', '담당자', '피킹지시번호', '라인상태', '처리일시'],
-      [['O-1', 'I-1', 'SKU-1', 2, confirmations[0], '', confirmations[0] === 'X' ? '재고없음' : '', '', 'PK-1', '미처리', ''],
-       ['O-1', 'I-2', 'SKU-1', 3, confirmations[1], '', '', '', 'PK-1', '미처리', '']]),
+      [['O-1', 'I-1', 'SKU-1', 4, '', '', '', '', 'PK-1', '미처리', ''],
+       ['O-1', 'I-2', 'SKU-1', 6, '', '', '', '', 'PK-1', '미처리', '']]),
     [context.ROLE.헤더]: table(context.ROLE.헤더,
-      ['피킹지시번호', '주문번호', '피킹담당자', '상태'], [['PK-1', 'O-1', 'Kim', '대기']]),
+      ['피킹지시번호', '주문번호', '피킹담당자', '상태', '출력일시'], [['PK-1', 'O-1', 'Kim', '대기', '']]),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
-      ['상품품목코드', '예약재고', '가용재고'], [['SKU-1', 5, 10]])
+      ['상품품목코드', '예약재고', '가용재고'], [['SKU-1', 10, 90]])
   };
 }
 
-test('picking waits for every O, then ships and consumes reserved inventory once', () => {
-  const waiting = pickingTables(['O', '']);
-  installTables(waiting);
-  assert.equal(context.S5_1_결과반영().완료주문.length, 0);
-  assert.equal(waiting[context.ROLE.마스터].rows[0][1], 5);
-
-  const tables = pickingTables(['O', 'O']);
+test('successful output auto-completes without manual O and consumes only reserved inventory once', () => {
+  const tables = pickingTables();
   const logs = installTables(tables);
-  assert.deepEqual([...context.S5_1_결과반영().완료주문], ['O-1']);
+  const result = context.finalizePickingAfterOutput_('PK-1');
+  assert.deepEqual([...result.완료주문], ['O-1']);
   assert.equal(tables[context.ROLE.마스터].rows[0][1], 0);
-  assert.equal(tables[context.ROLE.주문].rows[0][2], '출고완료');
-  assert.equal(context.S5_1_결과반영().완료주문.length, 0);
-  assert.equal(logs.length, 2, 'second run must not consume inventory again');
+  assert.equal(tables[context.ROLE.마스터].rows[0][2], 90, 'available stock must not be decremented twice');
+  assert.equal(tables[context.ROLE.주문].rows[0][4], '출고완료');
+  assert.deepEqual(tables[context.ROLE.라인].rows.map((row) => [row[4], row[5], row[9]]),
+    [['O', 4, '완료'], ['O', 6, '완료']]);
+  assert.equal(tables[context.ROLE.헤더].rows[0][3], '완료');
+  assert.equal(logs.length, 2);
+
+  const reprint = context.finalizePickingAfterOutput_('PK-1');
+  assert.equal(reprint.이미완료, true);
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [0, 90]);
+  assert.equal(logs.length, 2, 'reprint must not consume inventory or duplicate shipment logs');
+});
+
+test('PDF failure preserves reservation and successful retry finalizes exactly once', () => {
+  const tables = pickingTables();
+  const logs = installTables(tables);
+  context.S9_findPDF_ = () => false;
+  context.getOrCreateSubFolder_ = () => ({ createFile: () => ({ getId: () => 'pdf-id' }) });
+  context.S9_지시서생성 = () => ({ 출력시각: '2026-08-19 10:00', 슬롯: [], 총수량: 10 });
+  context.Utilities = { formatDate: () => '2026-08-19' };
+  context.tz_ = () => 'Asia/Seoul';
+  context.MimeType = { PDF: 'application/pdf' };
+  let fail = true;
+  context.HtmlService = { createHtmlOutput: () => ({ getBlob: () => ({ getAs: () => {
+    if (fail) throw new Error('render failed');
+    return { setName() { return this; } };
+  } }) }) };
+
+  assert.throws(() => context.S9_피킹PDF생성('PK-1', {}), /render failed/);
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [10, 90]);
+  assert.equal(tables[context.ROLE.주문].rows[0][4], '예약');
+
+  fail = false;
+  context.S9_피킹PDF생성('PK-1', {});
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [0, 90]);
+  assert.equal(tables[context.ROLE.주문].rows[0][4], '출고완료');
+  assert.equal(logs.length, 2);
 });
 
 test('picking X delegates whole-order cancellation to the shared service', () => {
-  const tables = pickingTables(['X', '']); installTables(tables);
+  const tables = pickingTables(); tables[context.ROLE.라인].rows[0][4] = 'X';
+  tables[context.ROLE.라인].rows[0][6] = '재고없음'; installTables(tables);
   const calls = [];
   const original = context.cancelOrder_;
   context.cancelOrder_ = (orderNo, reason, source) => { calls.push({ orderNo, reason, source }); return { 취소: true }; };
@@ -143,34 +175,29 @@ test('picking X delegates whole-order cancellation to the shared service', () =>
   assert.deepEqual(calls, [{ orderNo: 'O-1', reason: '재고없음', source: 'PICKING_X' }]);
 });
 
-test('one failed order in a shared reservation batch does not cancel sibling orders', () => {
+test('reservation FIFO output finalizes selected batch orders and leaves unselected reservation untouched', () => {
   const tables = {
     [context.ROLE.주문]: table(context.ROLE.주문,
-      ['주문번호', '품목별 주문번호', '주문상태', '출고완료'],
-      [['A001', 'I-1', '처리완료', 0], ['A002', 'I-2', '처리완료', 0], ['A003', 'I-3', '처리완료', 0]]),
+      ['주문번호', '품목별 주문번호', '상품품목코드', '수량', '주문상태', '출고완료', '피킹지시번호', '확정일시', '대기사유'],
+      [['A001', 'I-1', 'SKU-1', 40, '예약', 0, 'PK-RES-1', new Date(), ''],
+       ['A002', 'I-2', 'SKU-1', 50, '예약', 0, 'PK-RES-1', new Date(), ''],
+       ['A003', 'I-3', 'SKU-1', 10, '예약', 0, '', '', '']]),
     [context.ROLE.라인]: table(context.ROLE.라인,
       ['주문번호', '품목별 주문번호', '상품코드', '필요수량', '확인', '실제수량', '예외사유', '담당자', '피킹지시번호', '라인상태', '처리일시'],
-      [['A001', 'I-1', 'SKU-1', 1, 'O', '', '', '', 'PK-RES-1', '미처리', ''],
-       ['A002', 'I-2', 'SKU-1', 1, 'X', '', '재고없음', '', 'PK-RES-1', '미처리', ''],
-       ['A003', 'I-3', 'SKU-1', 1, 'O', '', '', '', 'PK-RES-1', '미처리', '']]),
+      [['A001', 'I-1', 'SKU-1', 40, '', '', '', '', 'PK-RES-1', '미처리', ''],
+       ['A002', 'I-2', 'SKU-1', 50, '', '', '', '', 'PK-RES-1', '미처리', '']]),
     [context.ROLE.헤더]: table(context.ROLE.헤더,
-      ['피킹지시번호', '주문번호', '피킹담당자', '상태'],
-      [['PK-RES-1', 'A001', 'Kim', '대기'], ['PK-RES-1', 'A002', 'Kim', '대기'], ['PK-RES-1', 'A003', 'Kim', '대기']]),
+      ['피킹지시번호', '주문번호', '피킹담당자', '상태', '출력일시'],
+      [['PK-RES-1', 'A001', 'Kim', '대기', ''], ['PK-RES-1', 'A002', 'Kim', '대기', '']]),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
-      ['상품품목코드', '예약재고', '가용재고'], [['SKU-1', 3, 10]])
+      ['상품품목코드', '예약재고', '가용재고'], [['SKU-1', 90, 10]])
   };
-  installTables(tables);
-  const original = context.cancelOrder_;
-  context.cancelOrder_ = orderNo => {
-    const row = tables[context.ROLE.주문].rows.find(item => item[0] === orderNo);
-    row[2] = '취소';
-    tables[context.ROLE.라인].rows.find(item => item[0] === orderNo)[9] = '취소';
-    return { 취소: true };
-  };
-  const result = context.S5_1_결과반영();
-  context.cancelOrder_ = original;
-  assert.deepEqual([...result.완료주문].sort(), ['A001', 'A003']);
-  assert.deepEqual(tables[context.ROLE.주문].rows.map(row => row[2]), ['출고완료', '취소', '출고완료']);
+  const logs = installTables(tables);
+  context.finalizePickingAfterOutput_('PK-RES-1');
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [0, 10]);
+  assert.deepEqual(tables[context.ROLE.주문].rows.map(row => row[4]), ['출고완료', '출고완료', '예약']);
+  context.finalizePickingAfterOutput_('PK-RES-1');
+  assert.equal(logs.length, 2, 'reservation batch reprint must be inventory-idempotent');
 });
 
 function cancellationTables(state, available, reserved, confirmed = '') {
@@ -193,15 +220,19 @@ test('central cancellation restores according to state and is idempotent', () =>
   context.cancelOrder_('O-1', '고객 요청', 'TEST', {});
   assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10, 0]);
 
-  tables = cancellationTables('처리완료', 8, 2, new Date()); installTables(tables);
+  tables = cancellationTables('예약', 8, 2, new Date()); installTables(tables);
   context.cancelOrder_('O-1', '고객 요청', 'TEST', {});
   assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10, 0]);
   context.cancelOrder_('O-1', '고객 요청', 'TEST', {});
   assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10, 0]);
 
   tables = cancellationTables('출고완료', 8, 0); installTables(tables);
-  assert.equal(context.cancelOrder_('O-1', '반품', 'TEST', {}).확인필요, true);
+  const warning = context.cancelOrder_('O-1', '반품', 'TEST', {});
+  assert.equal(warning.확인필요, true);
+  assert.match(warning.메시지, /피킹지시서가 출력되어 출고 처리된 주문/);
   assert.equal(tables[context.ROLE.마스터].rows[0][1], 8);
+  context.cancelOrder_('O-1', '반품', 'TEST', { confirmReturn: true });
+  assert.equal(tables[context.ROLE.마스터].rows[0][1], 10);
   context.cancelOrder_('O-1', '반품', 'TEST', { confirmReturn: true });
   assert.equal(tables[context.ROLE.마스터].rows[0][1], 10);
 });

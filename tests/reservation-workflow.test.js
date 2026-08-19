@@ -147,10 +147,9 @@ test('successful generation makes the order immediately ineligible for a second 
   });
   context.S3_1_주문확정 = () => ({ 준비주문: ['A001'] });
   context.S4_1_피킹지시생성 = () => { pickingCalls += 1; return { 지시번호: 'PK-20260819-RES-001' }; };
-  context.S9_피킹PDF생성 = () => ({ 생성: true });
+  context.S9_피킹PDF생성 = () => { eligible = false; return { 생성: true, 출고확정: { 완료주문: ['A001'] } }; };
   context.inputFolder_ = () => ({});
   context.markPickingOutputState_ = () => {};
-  context.markOrdersReady_ = () => { eligible = false; };
   context.D0_대시보드전체갱신 = () => {};
   context.writeOpLog_ = () => {};
   assert.equal(context.createReservationPickingBatch_('BOOK').created, true);

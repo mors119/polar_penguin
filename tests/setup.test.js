@@ -78,7 +78,7 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     setValue(value) { this.sheet.set(this.row, this.col, value); return this; }
   }
   ['setFontWeight', 'setBackground', 'setFontColor', 'setVerticalAlignment', 'setNumberFormat',
-    'setDataValidation', 'setHelpText', 'setFontSize', 'setWrap', 'merge', 'setNote'].forEach((method) => {
+    'setDataValidation', 'clearDataValidations', 'setHelpText', 'setFontSize', 'setWrap', 'merge', 'setNote'].forEach((method) => {
     FakeRange.prototype[method] = function noop() { return this; };
   });
 
@@ -219,7 +219,7 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     [...root.folders.map((folder) => folder.name), ...root.files.map((file) => file.name)].sort(),
     ['Error', 'Input', 'Output', 'Polar Penguin', 'Success'].sort()
   );
-  assert.deepEqual(triggers.map((trigger) => trigger.getHandlerFunction()).sort(), ['onOpen', 'processInput', 'syncAndRefresh']);
+  assert.deepEqual(triggers.map((trigger) => trigger.getHandlerFunction()).sort(), ['onOpen', 'processInput']);
 
   const operationSs = spreadsheets.get(properties.get('OPERATION_SPREADSHEET_ID'));
   assert.equal(properties.get('CONSOLE_SS_ID'), operationSs.getId());
@@ -234,9 +234,9 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   for (const name of ['피킹(헤더)', '재고이동로그', '작업로그', '입력처리로그', '설정']) {
     assert.equal(operationSs.getSheetByName(name).hidden, true, `${name} should be hidden`);
   }
-  assert.ok(validationLists.some((values) => values.join(',') === 'O,X'));
-  assert.ok(validationLists.some((values) => values.join(',') === '재고없음,불량재고'));
-  assert.ok(validationLists.some((values) => values.join(',') === '처리완료,예약,출고완료,취소'));
+  assert.equal(validationLists.some((values) => values.join(',') === 'O,X'), false);
+  assert.equal(validationLists.some((values) => values.join(',') === '재고없음,불량재고'), false);
+  assert.ok(validationLists.some((values) => values.join(',') === '예약,출고완료,취소'));
   assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input에 파일 넣기/);
 
   const configSheet = operationSs.getSheetByName('설정');
@@ -276,8 +276,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.equal(properties.has('FOLDER_ID_PROCESSED'), false);
   assert.equal(orderSheet.getRange(2, 1).getValue(), 'ORDER-KEEP');
   assert.equal(operationSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
-  assert.equal(triggers.length, 3);
-  assert.equal(triggers.find((trigger) => trigger.getHandlerFunction() === 'syncAndRefresh').minutes, 15);
+  assert.equal(triggers.length, 2);
+  assert.equal(triggers.find((trigger) => trigger.getHandlerFunction() === 'processInput').minutes, 15);
 
   operationSs.deleteSheet(operationSs.getSheetByName('피킹(헤더)'));
 
@@ -286,7 +286,7 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.ok(operationSs.getSheetByName('피킹(헤더)'));
   assert.equal(operationSs.getSheetByName('주문(완료)').getRange(2, 1).getValue(), 'ORDER-KEEP');
   assert.equal(spreadsheets.size, 1);
-  assert.equal(triggers.length, 3);
+  assert.equal(triggers.length, 2);
   assert.equal(dashboardRefreshes, 3);
 
   for (const role of [context.ROLE.마스터, context.ROLE.주문, context.ROLE.헤더, context.ROLE.라인]) {
