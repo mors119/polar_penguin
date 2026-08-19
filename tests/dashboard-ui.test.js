@@ -35,7 +35,7 @@ test('integrated dashboard renderer writes the real dashboard tab and visible ac
   context.tz_ = () => 'Asia/Seoul';
   context.renderIntegratedDashboard_(ss,
     { 처리완료: 2, 예약: 3, 취소: 4, 출고완료: 5, 전체: 14,
-      예약전체: 3, 예약출고가능: 1, 예약부족: 2,
+      예약전체: 3, 예약수량: 8, 예약출고가능: 1, 예약출고가능SKU: 1, 예약부족: 2,
       권고: { 제목: '주문 확정', 내용: ['확인'], 색: 'FFFFFF' } },
     { 총가용: 100, 총예약: 10, 부족: [1], 품절: 2, 예약부족SKU: [1] },
     { 전체라인: 8, 처리라인: 6, 미처리라인: 2, 진행률: 75, 작업대상주문: 1, kpi: { 출력오류: 0 } },
@@ -62,7 +62,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
   context.Logger = { log() {} };
   context.onOpen();
   assert.ok(menuNames.includes('📦 Polar Penguin'));
-  for (const expected of ['processInput', '선택_주문취소', '예약_주문피킹서생성', 'S5_2_수동반영',
+  for (const expected of ['processInput', '선택_주문취소', '예약상품_피킹관리', 'S5_2_수동반영',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '진단_시트구조',
     'setupSystem', '정리_로그', '설정_보기']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
@@ -71,7 +71,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
     assert.equal(handlers.includes(internal), false, `${internal} must stay out of the operator menu`);
   }
   for (const expected of ['Input 지금 처리', '작업지시서 조회/재출력', '피킹 결과 지금 반영',
-    '선택 주문 취소', '예약 주문 피킹서 생성', '대시보드 갱신', '시스템 상태 확인',
+    '선택 주문 취소', '예약상품 피킹 관리', '대시보드 갱신', '시스템 상태 확인',
     '시스템 설치/복구', '설정 보기', '로그 정리']) {
     assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
   }

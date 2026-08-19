@@ -98,7 +98,7 @@ function S4_1_피킹지시생성(orderNos, options) {
       출력일시: col_(헤더, COL.출력일시, false)
     };
 
-    var 지시번호 = nextInstructionNo_(헤더, h.지시번호);
+    var 지시번호 = nextInstructionNo_(헤더, h.지시번호, options.reservationBatch ? 'RES' : '');
     var 시작슬롯 = nextSlotNo_(헤더, h.지시번호, h.슬롯);   // 당일 기존 지시 다음 번호부터 연속 배정
 
     // ---------- 주문번호 그룹핑 ----------
@@ -152,31 +152,36 @@ function S4_1_피킹지시생성(orderNos, options) {
     }
 
     // ---------- 쓰기 (최신이 위로) ----------
-    var 헤더삽입 = false;
+    var 헤더삽입 = false, 라인삽입 = false, 라인행수 = 0, 라인시트 = null;
     try {
       prependRows_(헤더.sheet, 헤더행, [h.지시번호, h.주문번호]);
       헤더삽입 = true;
 
       var 라인 = readTable_(ROLE.라인);
-      prependRows_(라인.sheet, 라인결과.행(라인), [
+      var 생성라인 = 라인결과.행(라인);
+      prependRows_(라인.sheet, 생성라인, [
         col_(라인, COL.상품코드, true),
         col_(라인, COL.품목별주문번호, true),
         col_(라인, COL.피킹지시번호, true),
         col_(라인, COL.보관위치, true)
       ]);
+      라인삽입 = true; 라인행수 = 생성라인.length; 라인시트 = 라인.sheet;
+
+      // 주문 지시번호까지 성공해야 이번 피킹 데이터 쓰기를 완료한 것으로 본다.
+      var 지시컬럼 = 주문.rows.map(function (r) { return [r[o.지시번호]]; });
+      유효.forEach(function (t) { 지시컬럼[t.rowIdx][0] = 지시번호; });
+      주문.sheet.getRange(2, o.지시번호 + 1, 지시컬럼.length, 1).setValues(지시컬럼);
     } catch (e) {
-      // 피킹헤더만 남는 부분 실패를 막기 위해 이번 주문 묶음에서 추가한 행을 되돌린다.
+      // 헤더·라인·주문 연결 중 하나라도 실패하면 이번에 prepend한 피킹 행을 되돌린다.
+      if (라인삽입 && 라인시트) {
+        try { 라인시트.deleteRows(2, 라인행수); } catch (e1) { }
+      }
       if (헤더삽입) {
         try { 헤더.sheet.deleteRows(2, 헤더행.length); } catch (e2) { }
       }
       writeOpLog_('S4_1_피킹지시생성', '실패', e.message);
       throw new Error('피킹라인 생성 중 오류가 발생해 전체를 취소했습니다.\n' + e.message);
     }
-
-    // ---------- 주문 시트에 지시번호 기록 ----------
-    var 지시컬럼 = 주문.rows.map(function (r) { return [r[o.지시번호]]; });
-    유효.forEach(function (t) { 지시컬럼[t.rowIdx][0] = 지시번호; });
-    주문.sheet.getRange(2, o.지시번호 + 1, 지시컬럼.length, 1).setValues(지시컬럼);
 
     // ---------- 결과 ----------
     var 총품목 = 헤더행.reduce(function (a, r) { return a + r[h.품목수]; }, 0);
@@ -307,10 +312,10 @@ function buildMasterMap_() {
 }
 
 /** 당일 다음 배치번호 */
-function nextInstructionNo_(헤더, c지시번호) {
+function nextInstructionNo_(헤더, c지시번호, batchType) {
   var 접두어 = String(param_('지시번호접두어', 'PK'));
   var 오늘 = Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd');
-  var prefix = 접두어 + '-' + 오늘 + '-';
+  var prefix = 접두어 + '-' + 오늘 + '-' + (batchType ? batchType + '-' : '');
 
   var max = 0;
   헤더.rows.forEach(function (r) {
