@@ -3,7 +3,9 @@
  * ============================================================
  *  S2. 주문 CSV 취입
  * ============================================================
- *  Drive 폴더의 주문 CSV를 읽어 주문(완료) 시트에 적재한다.
+ *  주문 CSV/Google Spreadsheet를 읽어 주문(완료) 시트에 적재한다.
+ *  통합 파이프라인은 헤더 검증이 끝난 단일 파일을 넘기고 원본 이동을 직접 관리한다.
+ *  인자 없이 실행하는 기존 호환 모드에서만 CSV폴더ID를 스캔한다.
  *
  *   · 품목별 주문번호 기준으로 중복을 제거한다
  *     (같은 파일을 두 번 올려도 중복 적재되지 않는다)
@@ -22,6 +24,10 @@ var TEXT_COLUMNS_ORDER = [
   '수령인 휴대전화'
 ];
  
+/**
+ * @param {GoogleAppsScript.Drive.File=} 입력파일 processInput이 판별한 단일 파일
+ * @param {{skipMove:Boolean=, silent:Boolean=}=} options 파이프라인의 이동/알림 제어
+ */
 function S2_1_주문CSV취입(입력파일, options) {
   return withLock_(function () {
     options = options || {};

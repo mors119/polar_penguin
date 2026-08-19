@@ -360,7 +360,7 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   managed.push(['파라미터', '재고CSV폴더ID', folders.input.getId(), '통합 Input (호환)', exactFolder(folders.input)]);
 
   var defaults = [
-    ['파라미터', 'CSV처리완료폴더명', '처리완료', '취입 후 CSV 이동 대상'],
+    ['파라미터', 'CSV처리완료폴더명', '처리완료', '기존 S2 단독 실행용 호환 설정'],
     ['파라미터', '폴링주기(분)', 5, '변경 후 setupSystem 재실행'],
     ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
     ['파라미터', '예약키워드', '예약', '상품명 예약 판정 문자열 (쉼표 구분)'],

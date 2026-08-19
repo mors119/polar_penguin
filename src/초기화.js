@@ -108,9 +108,9 @@ function 초기화_2_전체실행(확인문구) {
 
     var msg = '초기화 완료\n\n' + out.join('\n') +
       '\n\n다음 단계\n' +
-      '  ① S1. 카페24 재고 동기화 (재고를 맞춥니다)\n' +
-      '  ② S2. 주문 CSV 취입\n' +
-      '  ③ S3. 주문 확정';
+      '  ① 카페24 재고 파일을 Input에 업로드\n' +
+      '  ② 주문 파일을 같은 Input에 업로드\n' +
+      '  ③ 트리거를 기다리거나 processInput() 실행';
 
     Logger.log(msg);
     alert_(msg);
@@ -138,7 +138,7 @@ function 초기화_9_마스터포함(확인문구) {
   if (last > 1) sh.deleteRows(2, last - 1);
 
   var msg = '상품마스터까지 초기화했습니다 (' + Math.max(last - 1, 0) + '행 삭제).\n\n' +
-    'S1. 카페24 재고 동기화를 실행해 상품을 다시 등록하고,\n' +
+    '카페24 재고 파일을 Input에 업로드해 상품을 다시 등록하고,\n' +
     '보관위치를 다시 입력해야 합니다.';
   Logger.log(msg);
   alert_(msg);

@@ -126,7 +126,7 @@ function 설치_2_시트정비(silent) {
   결과.push('상품마스터: ' + (추가마스터.length ? '열 추가 ' + 추가마스터.join(', ') : '변경 없음'));
 
   var msg = '시트 정비 완료\n\n' + 결과.join('\n') +
-            '\n\n다음: 설치_3_트리거등록() → D0_대시보드전체갱신()';
+            '\n\n참고: 공식 설치는 setupSystem()이 트리거와 대시보드까지 연속 구성합니다.';
   if (!silent) alert_(msg);
   writeOpLog_('설치_2_시트정비', '성공', 결과.join(' / '));
   return msg;
@@ -207,7 +207,7 @@ function 진단_시트구조() {
                   COL.실제수량, COL.품목별주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태]);
 
   var ss = consoleSS_();
-  [CONSOLE.설정, CONSOLE.재고이동로그, CONSOLE.작업로그].forEach(function (n) {
+  [CONSOLE.설정, CONSOLE.재고이동로그, CONSOLE.작업로그, CONSOLE.입력처리로그].forEach(function (n) {
     out.push((ss.getSheetByName(n) ? '✅ ' : '❌ ') + '콘솔 탭: ' + n);
   });
 
@@ -303,9 +303,9 @@ function 정리_로그(남길행수) {
 
 
 
-/** 주문 CSV 폴더 안을 그대로 보여준다 */
+/** 호환 함수명을 유지하며 통합 Input의 파일별 판별 결과를 보여준다. */
 function 진단_주문폴더() {
-  var raw = param_('CSV폴더ID', DEFAULT_FOLDER_ID);
+  var raw = param_('통합Input폴더ID', param_('CSV폴더ID', DEFAULT_FOLDER_ID));
   var m = String(raw).match(/[-\w]{25,}/);
   var 폴더ID = m ? m[0] : String(raw);
 
@@ -327,24 +327,22 @@ function 진단_주문폴더() {
     var f = it.next();
     var name = f.getName();
     var mime = f.getMimeType();
-    var 타입 = mime.indexOf('spreadsheet') >= 0 ? '구글시트 (⚠CSV 아님)'
+    var 타입 = mime.indexOf('spreadsheet') >= 0 ? '구글시트'
              : mime.indexOf('csv') >= 0 ? 'CSV'
              : mime.indexOf('excel') >= 0 ? '엑셀' : mime;
+    var 판별 = INPUT_TYPE.UNKNOWN;
+    var 오류 = '';
+    try { 판별 = detectInputType_(readUnifiedInput_(f)[0] || []); }
+    catch (e2) { 오류 = e2.inputCode || e2.message; }
 
-    var csv조건 = /\.csv$/i.test(name);
-    var 재고제외 = name.indexOf('카페24') < 0;
-    var 통과 = csv조건 && 재고제외;
-
-    out.push((통과 ? '✅ ' : '❌ ') + name);
-    out.push('     ' + 타입 +
-             '  |  .csv: ' + (csv조건 ? 'O' : 'X') +
-             '  |  주문파일: ' + (재고제외 ? 'O' : 'X (카페24 포함)'));
+    out.push((판별 !== INPUT_TYPE.UNKNOWN && !오류 ? '✅ ' : '❌ ') + name);
+    out.push('     ' + 타입 + '  |  판별: ' + 판별 + (오류 ? '  |  오류: ' + 오류 : ''));
     n++;
   }
 
   if (!n) out.push('(폴더가 비어 있습니다)');
   out.push('');
-  out.push('※ 하위 폴더는 검색하지 않습니다.');
+  out.push('※ processInput()과 동일하게 Input 직하위 파일만 검사합니다.');
 
   Logger.log(out.join('\n'));
 }

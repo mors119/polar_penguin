@@ -58,6 +58,7 @@ function S9_미배정슬롯조회() {
  * 작업지시서를 만든다.
  * @param {String} 이름  작업자 이름
  * @param {Number} 개수  가져갈 슬롯 수 (0이면 이미 배정된 것만 재출력)
+ * @param {{readOnly:Boolean=, 지시번호:String=}=} options PDF용 조회는 담당자/출력일시를 변경하지 않는다.
  */
 function S9_지시서생성(이름, 개수, options) {
   return withLock_(function () {
@@ -189,7 +190,7 @@ function S9_지시서생성(이름, 개수, options) {
   });
 }
 
-/** 신규 피킹 배치를 Output 폴더에 PDF로 보존한다. */
+/** 신규 피킹 배치를 Output/YYYY-MM-DD에 PDF로 보존하며 Output 전체에서 중복을 검사한다. */
 function S9_피킹PDF생성(지시번호, outputRoot) {
   if (!지시번호) return { 생성: false, 사유: '지시번호 없음' };
   outputRoot = outputRoot || DriveApp.getFolderById(String(param_('Output폴더ID', '')));
