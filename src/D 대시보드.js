@@ -17,15 +17,17 @@ function collectOrderStatus_() {
 }
 
 function collectStockStatus_() {
-  var out = { 상품수: 0, 총가용: 0, 총예약: 0, 총불량: 0, 품절: 0, 부족: [], 예약부족SKU: [] };
+  var out = { 상품수: 0, 총가용: 0, 총예약: 0, 총불량: 0, 품절: 0, 위치미지정: 0, 부족: [], 예약부족SKU: [] };
   var table = readTable_(ROLE.마스터);
   var C = { 코드: col_(table, COL.상품품목코드, true), 상품명: col_(table, COL.상품명, true),
-    가용: col_(table, COL.가용재고, true), 예약: col_(table, COL.예약재고, true), 불량: col_(table, COL.불량재고, false) };
+    가용: col_(table, COL.가용재고, true), 예약: col_(table, COL.예약재고, true), 불량: col_(table, COL.불량재고, false),
+    위치: col_(table, COL.기본보관위치, true) };
   var threshold = Number(param_('재고경고임계치', 3));
   table.rows.forEach(function (row) {
     var code = toStr_(row[C.코드]); if (!code) return;
     var available = toNum_(row[C.가용]), reserved = toNum_(row[C.예약]), bad = C.불량 >= 0 ? toNum_(row[C.불량]) : 0;
     out.상품수++; out.총가용 += available; out.총예약 += reserved; out.총불량 += bad;
+    if (!toStr_(row[C.위치])) out.위치미지정++;
     if (available <= 0) out.품절++;
     if (available <= threshold) out.부족.push({ 코드: code, 상품명: toStr_(row[C.상품명]), 가용: available, 예약: reserved });
   });
@@ -96,16 +98,15 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
   dashboardSection_(sh, 9, '주문', [['예약', order.예약], ['출고완료', order.출고완료], ['취소', order.취소], ['전체', order.전체]]);
   dashboardSection_(sh, 14, '예약', [['예약 주문', order.예약전체], ['예약 수량', order.예약수량], ['출고 가능 주문', order.예약출고가능], ['가용 예약 SKU', order.예약출고가능SKU], ['재고 부족 주문', order.예약부족]]);
   dashboardSection_(sh, 19, '출력', [['오늘 생성된 피킹지시', picking.오늘지시], ['오늘 출고 처리 수량', picking.오늘출고수량], ['출력 오류', picking.kpi.출력오류]]);
-  dashboardSection_(sh, 24, '재고', [['가용 재고', stock.총가용], ['예약 재고', stock.총예약], ['부족 상품', stock.부족.length], ['재고 경고', stock.품절], ['예약 부족 SKU', stock.예약부족SKU.length]]);
-  sh.getRange(28, 1, 1, 10).merge().setValue('예약 부족 상위 SKU: ' +
-    (stock.예약부족SKU.slice(0, 5).map(function (item) { return item.코드 + ' (' + item.주문수 + '건)'; }).join(' · ') || '없음'))
-    .setWrap(true).setBackground(DASHCOLOR.카드);
+  dashboardSection_(sh, 24, '재고', [['가용 재고', stock.총가용], ['예약 재고', stock.총예약], ['부족 상품', stock.부족.length], ['위치 미지정 상품', stock.위치미지정], ['예약 부족 SKU', stock.예약부족SKU.length]]);
+  sh.getRange(28, 1, 1, 10).merge().setValue('위치 미지정 상품 ' + stock.위치미지정 + '건 — 📍 위치 관리 → 위치 미지정 상품')
+    .setWrap(true).setBackground(stock.위치미지정 ? DASHCOLOR.경고 : DASHCOLOR.좋음);
   sh.getRange(30, 1, 1, 10).merge().setValue('최근 오류').setFontWeight('bold').setBackground(DASHCOLOR.제목).setFontColor('FFFFFF');
   sh.getRange(31, 1, 1, 10).merge().setValue(operation.recentErrors.join(' / ') || '없음').setWrap(true)
     .setBackground(operation.recentErrors.length ? DASHCOLOR.경고 : DASHCOLOR.좋음);
   sh.getRange(33, 1, 1, 10).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / ')).setWrap(true).setBackground(order.권고.색);
   sh.getRange(35, 1, 1, 10).merge().setValue('빠른 작업 (셀은 버튼이 아닙니다 — 상단 메뉴에서 실행)').setFontWeight('bold').setBackground(DASHCOLOR.경고);
-  sh.getRange(36, 1, 1, 8).setValues([['파일 입력: Drive Input', '', 'Input 지금 처리', '', '예약상품 피킹 관리', '', '작업지시서 재출력', '']]).setFontWeight('bold');
+  sh.getRange(36, 1, 1, 8).setValues([['파일 입력: Drive Input', '', 'Input 지금 처리', '', '예약상품 피킹 관리', '', '피킹지시서 재출력', '']]).setFontWeight('bold');
   [1, 3, 5, 7].forEach(function (col) { sh.getRange(36, col, 1, 2).merge(); });
   for (var c = 1; c <= 10; c++) sh.setColumnWidth(c, c % 2 ? 120 : 90);
   sh.setFrozenRows(2); sh.setHiddenGridlines(true); return sh;

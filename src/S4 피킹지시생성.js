@@ -2,12 +2,9 @@
  * ============================================================
  *  S4. 피킹지시 생성
  * ============================================================
- *  재고 예약이 끝난 지정 주문을 찾아 주문별 피킹헤더와
- *  품목별 피킹라인을 생성한다. 카트 슬롯은 당일 기존 지시 다음 번호부터
- *  이어서 배정하며, 담당자는 현장 입력 또는 S9 작업지시서 생성 시 채운다.
- *
- *  피킹지시번호는 같은 주문을 다시 지시하지 않게 하는 배치 표식이며,
- *  실제 작업 단위는 작업자가 S9에서 만드는 작업지시서다.
+ *  재고 예약이 끝난 지정 주문을 찾아 주문별 피킹헤더와 품목별 피킹라인을
+ *  생성한다. 피킹지시번호가 재생성 방지와 출력 단위를 나타내며, 카트/작업자
+ *  배정은 창고의 물리 운영에 맡기고 시스템 데이터로 만들지 않는다.
  * ============================================================
  */
 
@@ -90,16 +87,16 @@ function S4_1_피킹지시생성(orderNos, options) {
     var h = {
       지시번호: col_(헤더, COL.피킹지시번호, true),
       주문번호: col_(헤더, COL.주문번호, true),
-      슬롯: col_(헤더, COL.카트슬롯, true),
+      슬롯: col_(헤더, COL.카트슬롯, false),
       품목수: col_(헤더, COL.품목수, true),
       총수량: col_(헤더, COL.총수량, true),
-      담당자: col_(헤더, COL.피킹담당자, true),
+      담당자: col_(헤더, COL.피킹담당자, false),
       상태: col_(헤더, COL.상태, true),
+      생성일시: col_(헤더, COL.생성일시, false),
       출력일시: col_(헤더, COL.출력일시, false)
     };
 
     var 지시번호 = nextInstructionNo_(헤더, h.지시번호, options.reservationBatch ? 'RES' : '');
-    var 시작슬롯 = nextSlotNo_(헤더, h.지시번호, h.슬롯);   // 당일 기존 지시 다음 번호부터 연속 배정
 
     // ---------- 주문번호 그룹핑 ----------
     var 그룹 = {}, 순서 = [];
@@ -111,26 +108,23 @@ function S4_1_피킹지시생성(orderNos, options) {
     순서.sort();
 
     // ---------- 헤더 행 구성 ----------
-    var 헤더행 = [], 슬롯맵 = {};
+    var 헤더행 = [];
 
-    순서.forEach(function (no, idx) {
-      var 슬롯 = 시작슬롯 + idx;
-
+    순서.forEach(function (no) {
       var 총수량 = 0;
       그룹[no].forEach(function (t) {
         총수량 += toNum_(t.row[o.수량]);
       });
 
-      슬롯맵[no] = 슬롯;
-
       var row = new Array(헤더.width).fill('');
       row[h.지시번호] = 지시번호;
       row[h.주문번호] = no;
-      row[h.슬롯] = 슬롯;
+      if (h.슬롯 >= 0) row[h.슬롯] = '';       // 기존 시트 호환용 legacy 열
       row[h.품목수] = 그룹[no].length;
       row[h.총수량] = 총수량;
-      row[h.담당자] = '';                       // 작업자 또는 S9 출력 과정에서 입력한다.
+      if (h.담당자 >= 0) row[h.담당자] = '';   // 기존 시트 호환용 선택 감사 열
       row[h.상태] = ENUM.헤더상태.대기;
+      if (h.생성일시 >= 0) row[h.생성일시] = new Date();
       헤더행.push(row);
     });
 
@@ -189,9 +183,8 @@ function S4_1_피킹지시생성(orderNos, options) {
 
     var msg = '피킹지시 생성 완료\n\n' +
       '배치번호: ' + 지시번호 + '\n' +
-      '주문 ' + 순서.length + '건 / 품목 ' + 총품목 + '종 / 총수량 ' + 총수량합 + '\n' +
-      '카트 슬롯: ' + 시작슬롯 + ' ~ ' + (시작슬롯 + 순서.length - 1) + '\n\n' +
-      '작업자는 「작업지시서 출력」에서 이름을 넣고 자기 몫을 가져가면 됩니다.';
+      '주문 ' + 순서.length + '건 / 품목라인 ' + 총품목 + '개 / 총수량 ' + 총수량합 + '\n' +
+      'PDF에는 상품별 총 피킹수량과 주문별 포장 내역이 함께 표시됩니다.';
 
     if (Object.keys(제외주문).length) {
       msg += '\n\n⚠ 제외된 주문 (마스터 미등록)\n' +
@@ -199,8 +192,8 @@ function S4_1_피킹지시생성(orderNos, options) {
     }
 
     if (!options.silent) alert_(msg);
-    writeOpLog_('S4_1_피킹지시생성', '성공', 지시번호 + ' / 주문 ' + 순서.length + '건 / 슬롯 ' + 시작슬롯);
-    return { 생성: true, 지시번호: 지시번호, 주문수: 순서.length, 시작슬롯: 시작슬롯 };
+    writeOpLog_('S4_1_피킹지시생성', '성공', 지시번호 + ' / 주문 ' + 순서.length + '건');
+    return { 생성: true, 지시번호: 지시번호, 주문수: 순서.length };
   });
 }
 
@@ -326,22 +319,4 @@ function nextInstructionNo_(헤더, c지시번호, batchType) {
     }
   });
   return prefix + ('00' + (max + 1)).slice(-3);
-}
-
-/**
- * 당일 연속 슬롯 번호.
- *   같은 날 발행된 모든 배치를 통틀어 다음 번호를 준다.
- *   지시마다 1로 리셋하면 카트 슬롯 1이 여러 개 생겨 현장이 혼란스럽다.
- */
-function nextSlotNo_(헤더, c지시번호, c슬롯) {
-  var 접두어 = String(param_('지시번호접두어', 'PK'));
-  var 오늘 = 접두어 + '-' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd') + '-';
-
-  var max = 0;
-  헤더.rows.forEach(function (r) {
-    if (toStr_(r[c지시번호]).indexOf(오늘) !== 0) return;
-    var n = toNum_(r[c슬롯]);
-    if (n > max) max = n;
-  });
-  return max + 1;
 }

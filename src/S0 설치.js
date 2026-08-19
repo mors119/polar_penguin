@@ -65,7 +65,7 @@ function 설치_2_시트정비(silent) {
 
   /* ---------- 피킹 (헤더) ---------- */
   var 헤더 = readTable_(ROLE.헤더);
-  var 추가헤더 = ensureColumns_(헤더.sheet, 헤더.headers, [COL.출력일시]);
+  var 추가헤더 = ensureColumns_(헤더.sheet, 헤더.headers, [COL.생성일시, COL.출력일시]);
   결과.push('피킹(헤더): ' + (추가헤더.length ? '열 추가 ' + 추가헤더.join(', ') : '변경 없음'));
 
   헤더 = readTable_(ROLE.헤더);
@@ -82,11 +82,13 @@ function 설치_2_시트정비(silent) {
     .clearDataValidations().setBackground('F2F2F2');
   헤더.sheet.getRange(1, c헤더상태 + 1).setNote('시스템 관리 필드입니다. 출력 결과에 따라 자동 변경됩니다.');
 
-  // 담당자 칸을 노란색으로 — 여기 이름을 적으면 라인까지 전파된다
-  var c담당 = col_(헤더, COL.피킹담당자, true);
-  헤더.sheet.getRange(2, c담당 + 1, Math.max(헤더.sheet.getMaxRows() - 1, 1), 1)
-    .setBackground('FFF9E6');
-  결과.push('피킹(헤더): 담당자 칸 표시 (여기 이름을 적으면 라인에 자동 전파)');
+  // 기존 담당자 열은 감사 메모용으로만 남길 수 있으며 출력의 선행조건이 아니다.
+  var c담당 = col_(헤더, COL.피킹담당자, false);
+  if (c담당 >= 0) {
+    헤더.sheet.getRange(2, c담당 + 1, Math.max(헤더.sheet.getMaxRows() - 1, 1), 1)
+      .setBackground('F2F2F2');
+    헤더.sheet.getRange(1, c담당 + 1).setNote('선택적 감사 메모입니다. 피킹지시서 출력에 필요하지 않습니다.');
+  }
 
   /* ---------- 피킹 (라인) ---------- */
   var 라인 = readTable_(ROLE.라인);
@@ -257,8 +259,7 @@ function 진단_시트구조() {
   확인(ROLE.마스터, [COL.상품품목코드, COL.상품명, COL.기본보관위치, COL.가용재고, COL.예약재고, COL.예약상품]);
   확인(ROLE.주문, [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.수량,
                   COL.출고완료, COL.피킹지시번호, COL.주문상태, COL.확정일시]);
-  확인(ROLE.헤더, [COL.피킹지시번호, COL.주문번호, COL.카트슬롯, COL.품목수, COL.총수량,
-                  COL.피킹담당자, COL.상태]);
+  확인(ROLE.헤더, [COL.피킹지시번호, COL.주문번호, COL.품목수, COL.총수량, COL.상태]);
   확인(ROLE.라인, [COL.순번, COL.보관위치, COL.상품코드, COL.필요수량, COL.확인,
                   COL.실제수량, COL.품목별주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태]);
 
@@ -313,14 +314,15 @@ function onOpen(e) {
       .addSubMenu(ui.createMenu('📋 주문')
         .addItem('선택 주문 취소', '선택_주문취소')
         .addItem('예약상품 피킹 관리', '예약상품_피킹관리'))
-      .addSubMenu(ui.createMenu('📄 출력')
-        .addItem('작업지시서 조회 / 재출력', 'S9_1_작업지시서출력'))
+      .addSubMenu(ui.createMenu('📄 피킹지시서')
+        .addItem('피킹지시서 조회 / 재출력', 'S9_1_작업지시서출력'))
+      .addSubMenu(ui.createMenu('📍 위치 관리')
+        .addItem('위치 미지정 상품', '위치_미지정상품관리'))
       .addSubMenu(ui.createMenu('📊 운영')
         .addItem('대시보드 갱신', 'D0_대시보드전체갱신')
         .addItem('시스템 상태 확인', '진단_시트구조'))
       .addSubMenu(ui.createMenu('⚙ 관리')
         .addItem('시스템 설치 / 복구', 'setupSystem')
-        .addItem('설정 보기', '설정_보기')
         .addItem('로그 정리', '정리_로그'))
       .addToUi();
   } catch (err) {

@@ -238,6 +238,9 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.equal(validationLists.some((values) => values.join(',') === '재고없음,불량재고'), false);
   assert.ok(validationLists.some((values) => values.join(',') === '예약,출고완료,취소'));
   assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input에 파일 넣기/);
+  const pickingHeaderColumns = operationSs.getSheetByName('피킹(헤더)').getDataRange().getValues()[0];
+  assert.equal(pickingHeaderColumns.includes('카트 슬롯'), false);
+  assert.equal(pickingHeaderColumns.includes('피킹담당자'), false);
 
   const configSheet = operationSs.getSheetByName('설정');
   const configValues = configSheet.getDataRange().getValues();

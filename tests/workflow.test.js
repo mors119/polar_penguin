@@ -141,9 +141,16 @@ test('successful output auto-completes without manual O and consumes only reserv
 test('PDF failure preserves reservation and successful retry finalizes exactly once', () => {
   const tables = pickingTables();
   const logs = installTables(tables);
-  context.S9_findPDF_ = () => false;
+  const emptyIterator = () => ({ hasNext: () => false, next: () => undefined });
+  const outputRoot = { getFilesByName: () => emptyIterator(), getFolders: () => emptyIterator() };
   context.getOrCreateSubFolder_ = () => ({ createFile: () => ({ getId: () => 'pdf-id' }) });
-  context.S9_지시서생성 = () => ({ 출력시각: '2026-08-19 10:00', 슬롯: [], 총수량: 10 });
+  context.buildPickingDocumentData_ = () => ({
+    title: '피킹지시서', instructionNo: 'PK-1', createdAt: '2026-08-19 10:00',
+    summary: { orderCount: 1, skuCount: 1, totalQuantity: 10 }, missingLocationCount: 0,
+    pickSummary: [{ location: 'A-01', sku: 'SKU-1', productName: '상품', option: '', orderCount: 1, quantity: 10 }],
+    orders: [{ orderNo: 'O-1', orderDateText: '', recipient: '', phoneLast4: '', postalCode: '', address: '', message: '',
+      items: [{ productName: '상품', option: '', quantity: 10 }] }], hasAddress: false, hasMessage: false
+  });
   context.Utilities = { formatDate: () => '2026-08-19' };
   context.tz_ = () => 'Asia/Seoul';
   context.MimeType = { PDF: 'application/pdf' };
@@ -153,12 +160,12 @@ test('PDF failure preserves reservation and successful retry finalizes exactly o
     return { setName() { return this; } };
   } }) }) };
 
-  assert.throws(() => context.S9_피킹PDF생성('PK-1', {}), /render failed/);
+  assert.throws(() => context.S9_피킹PDF생성('PK-1', outputRoot), /render failed/);
   assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [10, 90]);
   assert.equal(tables[context.ROLE.주문].rows[0][4], '예약');
 
   fail = false;
-  context.S9_피킹PDF생성('PK-1', {});
+  context.S9_피킹PDF생성('PK-1', outputRoot);
   assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [0, 90]);
   assert.equal(tables[context.ROLE.주문].rows[0][4], '출고완료');
   assert.equal(logs.length, 2);
