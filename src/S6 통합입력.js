@@ -2,18 +2,30 @@
  * ============================================================
  *  S6. 통합 Input Pipeline
  * ============================================================
- *  Input 폴더의 CSV/구글 시트를 헤더로 판별해 기존 S1~S4/S9에 연결한다.
+ *  Input 폴더의 CSV/Google Spreadsheet를 파일명이 아닌 헤더로 판별하고,
+ *  기존 업무 모듈을 순서대로 호출한다. 이 모듈은 업무 규칙을 복제하지 않고
+ *  파일 감지·검증·이동과 S1/S2 → S3 → S4 → S9 연결만 담당한다.
  *
  *  처리 순서
  *    Input → 파일 판별/검증 → S1 또는 S2 → S3 → S4 → S9 PDF
  *    성공 원본 → Processed/YYYY-MM-DD, 실패 원본 → Error/YYYY-MM-DD
  *
  *  재고 파일을 주문보다 먼저 처리해 예약대기 주문이 최신 재고로 재평가되게 한다.
- *  성공 체크섬은 입력처리로그에 남기며, 같은 내용의 재업로드는 오류로 격리한다.
+ *  결과는 작업로그에 기록하고 실패 시 설정의 알림이메일로 Gmail을 발송한 뒤,
+ *  마지막에 대시보드를 갱신한다. 성공 체크섬이 같은 재업로드는 중복 처리하지 않는다.
  */
 
 var INPUT_TYPE = { ORDER: 'ORDER', INVENTORY: 'INVENTORY', UNKNOWN: 'UNKNOWN' };
 
+/**
+ * 통합 Input 폴더의 모든 파일을 감지해 재고 우선 순서로 처리한다.
+ *
+ * 파일 하나의 실패가 나머지 파일 처리를 막지 않으며, 전체 처리는 Script Lock으로
+ * 직렬화된다. 성공 파일은 Processed, 실패 파일은 Error의 날짜 폴더로 이동한다.
+ *
+ * @return {Object} 감지·성공·실패·유형별 건수와 파일별 결과
+ * @sideEffect 업무 시트, 입력처리로그, Drive 파일 위치, PDF, Gmail 및 대시보드를 갱신한다.
+ */
 function processInput() {
   return withLock_(function () {
     var inputFolder = inputFolder_('통합Input폴더ID');
@@ -47,6 +59,7 @@ function processInput() {
       }
     });
 
+    // 일부 파일이 실패해도 성공한 파일의 결과까지 반영해 운영 현황을 최신화한다.
     try { D0_대시보드전체갱신(true); }
     catch (dashboardError) { writeOpLog_('processInput', '경고', '대시보드 갱신 실패 / ' + dashboardError.message); }
     writeOpLog_('processInput', report.실패 ? '부분성공' : '성공',
@@ -81,6 +94,7 @@ function processInputFile_(file, processedFolder, outputFolder) {
   }
 
   var business = runInputBusiness_(type, file, outputFolder);
+  // 업무 반영 뒤 성공 체크섬을 먼저 남겨, 파일 이동만 실패한 경우 재처리로 재고가 중복 반영되지 않게 한다.
   recordInputLog_(file, fingerprint, type, 'PROCESSED', '', inputBusinessMessage_(business));
   moveInputFile_(file, processedFolder);
   return { type: type, business: business };
@@ -167,6 +181,7 @@ function readUnifiedInput_(file) {
   if (!csv && !sheet) throw inputError_('UNSUPPORTED_FORMAT', 'CSV 또는 Google Spreadsheet만 처리할 수 있습니다.', INPUT_TYPE.UNKNOWN);
   try {
     if (sheet) {
+      // 업로드용 Spreadsheet는 첫 번째 시트를 입력 표로 사용한다.
       var sh = SpreadsheetApp.openById(file.getId()).getSheets()[0];
       if (!sh || sh.getLastRow() < 1 || sh.getLastColumn() < 1) return [];
       return sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
@@ -178,7 +193,7 @@ function readUnifiedInput_(file) {
   }
 }
 
-/** 파일 ID가 아닌 파싱된 내용의 SHA-256을 쓰므로 다시 업로드해도 중복을 검출한다. */
+/** 파일 ID나 이름이 아닌 파싱된 내용의 SHA-256을 쓰므로 동일 내용을 다시 업로드해도 검출한다. */
 function inputFingerprint_(file, parsed) {
   var payload = JSON.stringify(parsed || []);
   var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, payload, Utilities.Charset.UTF_8);

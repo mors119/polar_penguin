@@ -1,8 +1,9 @@
 /**
  * ============================================================
- *  S9. 작업지시서 출력  (v4.0 · 신규)
+ *  S9. 작업지시서 · PDF 생성
  * ============================================================
- *  피킹(헤더)와 피킹(라인) 사이에 놓이는 종이 단계다.
+ *  피킹헤더와 피킹라인을 현장 작업용 지시서로 구성한다. 메뉴에서는 작업자에게
+ *  미배정 슬롯을 배정해 인쇄하고, 통합 Input은 새 피킹 배치만 PDF로 보존한다.
  *
  *  흐름
  *   ① 작업자가 「작업지시서 출력」을 연다
@@ -13,6 +14,7 @@
  *
  *  ③에서 헤더의 피킹담당자가 채워지므로,
  *  S5가 라인의 담당자 칸까지 자동으로 채운다.
+ *  현장에서 한 품목이라도 X이면 S5가 부분 출고하지 않고 주문 전체를 취소한다.
  * ============================================================
  */
 
@@ -59,6 +61,8 @@ function S9_미배정슬롯조회() {
  * @param {String} 이름  작업자 이름
  * @param {Number} 개수  가져갈 슬롯 수 (0이면 이미 배정된 것만 재출력)
  * @param {{readOnly:Boolean=, 지시번호:String=}=} options PDF용 조회는 담당자/출력일시를 변경하지 않는다.
+ * @return {Object} 작업자, 출력시각, 슬롯·품목·수량 정보 또는 오류 메시지
+ * @sideEffect readOnly가 아니면 새 슬롯의 피킹담당자와 출력일시를 기록한다.
  */
 function S9_지시서생성(이름, 개수, options) {
   return withLock_(function () {
@@ -190,7 +194,15 @@ function S9_지시서생성(이름, 개수, options) {
   });
 }
 
-/** 신규 피킹 배치를 Output/YYYY-MM-DD에 PDF로 보존하며 Output 전체에서 중복을 검사한다. */
+/**
+ * 신규 피킹 배치를 Output/YYYY-MM-DD에 PDF로 보존한다.
+ * Output 바로 아래와 날짜 하위 폴더에서 같은 지시번호의 PDF를 먼저 찾아 재실행을 안전하게 한다.
+ *
+ * @param {string} 지시번호 PDF로 만들 피킹지시번호
+ * @param {GoogleAppsScript.Drive.Folder=} outputRoot Output 폴더. 생략하면 설정값을 사용한다.
+ * @return {Object} 생성 또는 기존 파일 재사용 결과
+ * @sideEffect 신규인 경우에만 Drive에 PDF를 만들고 작업로그를 기록한다.
+ */
 function S9_피킹PDF생성(지시번호, outputRoot) {
   if (!지시번호) return { 생성: false, 사유: '지시번호 없음' };
   outputRoot = outputRoot || DriveApp.getFolderById(String(param_('Output폴더ID', '')));

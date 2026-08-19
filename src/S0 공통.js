@@ -2,16 +2,15 @@
 
 /**
  * ============================================================
- *  00. 공통  (v4.0)
+ *  S0. 공통 정의와 런타임 유틸리티
  * ============================================================
- *  v4 변경
- *   · 신규 데이터를 시트 최상단에 쌓는다 (prependRows_)
- *   · 피킹라인에 담당자 열 추가
- *   · 입고 관련 상수 제거 (카페24 동기화로 일원화)
+ *  시트/열/상태의 표준 정의, Console·업무 Spreadsheet 연결,
+ *  테이블 IO, 재고/작업 로깅, LockService, UI 알림을 한곳에서 제공한다.
+ *  다른 모듈은 시트명과 컬럼명을 직접 중복하지 않고 이 정의를 사용한다.
  * ============================================================
  */
 
-/** 설정·로그 탭이 있는 스프레드시트 ID */
+/** setup 이전 환경을 위한 기존 fallback. 정상 설치는 Script Property의 CONSOLE_SS_ID를 사용한다. */
 var CONSOLE_SS_ID = '';
 
 var CONSOLE = {
@@ -252,10 +251,7 @@ function col_(table, canonical, required) {
   return -1;
 }
 
-/**
- * ★ v4 — 신규 행을 시트 최상단(2행)에 삽입한다.
- *   최신 데이터가 위로 쌓여 관리자·작업자가 스크롤 없이 확인할 수 있다.
- */
+/** 신규 행을 헤더 바로 아래(2행)에 삽입해 최신 업무 데이터를 위에 두는다. */
 function prependRows_(sheet, rows, textColumns) {
   if (!rows || !rows.length) return 2;
   var width = rows[0].length;
@@ -272,7 +268,7 @@ function prependRows_(sheet, rows, textColumns) {
   return 2;
 }
 
-/** 하단에 추가 (로그 등 시간순 보존이 필요한 곳에서만 사용) */
+/** 기존 행 뒤에 추가한다. 현재는 S1의 신규 상품 등록에 사용한다. */
 function appendRows_(sheet, rows, textColumns) {
   if (!rows || !rows.length) return 0;
   var start = sheet.getLastRow() + 1;
@@ -331,7 +327,7 @@ function isPreorderName_(상품명) {
 }
 
 /* ============================================================
- *  로그  (★ v4 — 최신이 위로)
+ *  로그 (최신이 위로)
  * ============================================================ */
 
 function writeStockLog_(entries) {
@@ -376,6 +372,8 @@ function writeOpLog_(함수명, 결과, 메시지) {
  * ============================================================ */
 
 function withLock_(fn) {
+  // processInput → S1/S2 → S3 → S4/S9처럼 한 실행 안에서 lock 함수가 중첩 호출될 수 있다.
+  // 같은 실행 컨텍스트의 내부 호출은 깊이만 증가시켜 ScriptLock 재획득 대기를 피한다.
   if (_scriptLockDepth > 0) {
     _scriptLockDepth++;
     try { return fn(); } finally { _scriptLockDepth--; }
@@ -440,7 +438,7 @@ var DASHCOLOR = {
   선: 'BFC9D4'
 };
 
-/** v3 잔재 탭 삭제 + 작업로그 정리 (시트를 열지 않고 실행) */
+/** 더 이상 사용하지 않는 `입고`/`대시보드` Console 탭을 제거하고 작업로그를 500건으로 줄인다. */
 function 정리_불필요탭() {
   var ss = consoleSS_();
   var out = [];
