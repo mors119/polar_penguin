@@ -133,7 +133,7 @@ function renderLegacyOrderDashboard_() {
  */
 function collectOrderStatus_() {
   var out = {
-    접수: 0, 확정: 0, 예약대기: 0, 취소: 0, 출고완료: 0, 전체: 0,
+    접수: 0, 확정: 0, 예약대기: 0, 예약품목수: 0, 취소: 0, 출고완료: 0, 전체: 0,
     피킹: { 전체라인: 0, 처리라인: 0, 남은라인: 0, 진행률: 0, 속도: 0, 예상분: null, 대기슬롯: 0, 진행슬롯: 0 },
     예약목록: [],
     권고: { 제목: '', 내용: [], 색: DASHCOLOR.카드 }
@@ -168,6 +168,7 @@ function collectOrderStatus_() {
     }
 
     if (상태 === ENUM.주문상태.예약대기) {
+      out.예약품목수++;
       var c = toStr_(r[O.상품코드]);
       if (c) 예약집계[c] = (예약집계[c] || 0) + toNum_(r[O.수량]);
     }
@@ -248,8 +249,8 @@ function collectOrderStatus_() {
  * 진행 상황을 보고 관리자에게 다음 행동을 권한다.
  *
  *  판단 기준
- *   · 남은 작업이 적고 접수 주문이 쌓여 있다 → 주문 확정을 더 돌려라
- *   · 확정된 주문이 있는데 지시가 안 나갔다 → 피킹지시를 생성해라
+ *   · 남은 작업이 적고 접수 주문이 쌓여 있다 → 자동 Input 처리 상태를 확인한다
+ *   · 확정된 주문이 있는데 지시가 안 나갔다 → 자동 피킹 생성 지연을 경고한다
  *   · 남은 작업이 많다 → 현재 물량부터 소화해라
  *   · 예약대기 수량보다 가용재고가 많다 → 해소 가능 여부를 확인해라
  */
@@ -266,7 +267,7 @@ function 권고산출_(d) {
       색: DASHCOLOR.완료,
       내용: [
         '재고가 확보된 예약 품목이 ' + 출고가능.length + '종 있습니다.',
-        '「S3. 주문 확정」을 실행하면 예약대기 주문이 자동으로 확정됩니다.',
+        '다음 재고 Input 처리에서 예약대기 주문이 자동으로 재평가됩니다.',
         '대상: ' + 출고가능.slice(0, 3).map(function (p) { return p.코드; }).join(', ') +
           (출고가능.length > 3 ? ' 외 ' + (출고가능.length - 3) + '종' : '')
       ]
@@ -276,11 +277,11 @@ function 권고산출_(d) {
   // 2) 확정됐는데 지시 미발행
   if (d.확정 > 0) {
     return {
-      제목: '📋  피킹지시를 발행하세요',
+      제목: '📋  자동 피킹 생성을 확인하세요',
       색: DASHCOLOR.진행,
       내용: [
         '확정된 주문 ' + d.확정 + '건이 지시 발행을 기다리고 있습니다.',
-        '「S4. 피킹지시 생성」을 실행하면 작업 목록이 만들어집니다.'
+        'Input 파이프라인이 피킹지시와 PDF를 자동 생성합니다. 지연 시 작업로그를 확인하세요.'
       ]
     };
   }
@@ -295,7 +296,7 @@ function 권고산출_(d) {
           ? '진행 중인 피킹 작업이 없습니다.'
           : '남은 작업 ' + 남은 + '품목, 예상 ' + 표시시간_(예상) + ' 내 완료 예정입니다.',
         '접수 상태 주문이 ' + d.접수 + '건 대기 중입니다.',
-        '「S3. 주문 확정」 → 「S4. 피킹지시 생성」 순으로 추가 투입하세요.'
+        '새 Input 파일은 확정과 피킹 생성까지 자동 처리됩니다.'
       ]
     };
   }
@@ -743,11 +744,11 @@ function collectPickingStatus_() {
  * ============================================================ */
 
 /**
- * 주문·재고·피킹 집계를 한 탭에 갱신하고 파생 운영 탭도 동기화한다.
+ * 주문·재고·피킹·입력 집계를 하나의 파생 대시보드 탭에 갱신한다.
  *
  * @param {boolean=} silent true면 완료 알림을 표시하지 않는다.
  * @return {string} 갱신 결과
- * @sideEffect 단일 운영 Spreadsheet의 대시보드와 파생 조회 탭을 렌더링한다.
+ * @sideEffect 단일 운영 Spreadsheet의 대시보드만 렌더링한다.
  */
 function D0_대시보드전체갱신(silent) {
   try {
@@ -755,7 +756,6 @@ function D0_대시보드전체갱신(silent) {
     var stock = collectStockStatus_();
     var picking = collectPickingStatus_();
     var operation = collectOperationStatus_();
-    refreshOperationalViews_();
     renderIntegratedDashboard_(consoleSS_(), order, stock, picking, operation);
     var result = '✅ 통합 대시보드';
     if (!silent) alert_('대시보드 갱신 완료');
@@ -786,52 +786,60 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
     '  ·  실행은 상단 「📦 Polar Penguin」 메뉴를 사용하세요.'
   ).setFontColor('595959');
 
-  dashboardSection_(sh, 4, '주문', [
+  dashboardSection_(sh, 4, '오늘의 운영 상태', [
+    ['최근 Input 처리', operation.latestTime], ['최근 결과', operation.latestResult],
+    ['운영 경고', operation.warning]
+  ]);
+  dashboardSection_(sh, 9, '주문', [
     ['접수', order.접수], ['확정', order.확정], ['예약대기', order.예약대기],
     ['취소', order.취소], ['출고완료', order.출고완료], ['전체 주문', order.전체]
   ]);
-  dashboardSection_(sh, 9, '재고', [
+  dashboardSection_(sh, 14, '재고', [
     ['가용 재고', stock.총가용], ['예약 재고', stock.총예약],
     ['저재고 상품', stock.부족.length], ['품절/경고', stock.품절]
   ]);
-  dashboardSection_(sh, 14, '피킹', [
-    ['전체 라인', picking.전체라인], ['완료 라인', picking.처리라인],
-    ['남은 라인', picking.전체라인 - picking.처리라인], ['진행률', picking.진행률 + '%'],
-    ['대기 슬롯', picking.kpi.대기], ['진행 슬롯', picking.kpi.진행]
-  ]);
-  sh.getRange(20, 1, 1, 10).merge().setValue(
-    '속도 ' + (order.피킹.속도 ? order.피킹.속도 + ' 라인/시간' : '데이터 부족') +
-    '  ·  예상 ' + (order.피킹.예상분 === null ? '—' : 표시시간_(order.피킹.예상분)) +
-    '  ·  ' + bar_(picking.진행률, 24)
-  ).setFontFamily('Consolas').setBackground(DASHCOLOR.카드);
+  sh.getRange(19, 1, 1, 10).merge().setValue(
+    '주의 상품: ' + (stock.부족.length ? stock.부족.slice(0, 5).map(function (item) {
+      return item.코드 + ' (' + item.가용 + ')';
+    }).join(' · ') : '없음')
+  ).setWrap(true).setBackground(stock.부족.length ? DASHCOLOR.경고 : DASHCOLOR.좋음);
 
   var waitingQty = 0;
+  var availableNow = 0;
+  var shortage = 0;
   order.예약목록.forEach(function (item) { waitingQty += item.수량; });
+  order.예약목록.forEach(function (item) {
+    availableNow += Math.min(item.현재고, item.수량);
+    shortage += Math.max(item.부족, 0);
+  });
   var releasable = order.예약목록.filter(function (item) { return item.부족 <= 0; }).length;
   dashboardSection_(sh, 22, '예약', [
-    ['예약대기 주문', order.예약대기], ['대기 수량', waitingQty],
-    ['재고 부족 품목', order.예약목록.filter(function (item) { return item.부족 > 0; }).length],
-    ['출고 가능 품목', releasable]
+    ['대기 주문', order.예약대기], ['대기 품목', order.예약품목수], ['대기 수량', waitingQty],
+    ['현재 확보', availableNow], ['남은 부족', shortage], ['출고 가능 품목', releasable]
   ]);
-  sh.getRange(27, 1, 1, 10).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / '))
+  dashboardSection_(sh, 27, '피킹', [
+    ['대기 주문/슬롯', picking.kpi.대기], ['진행 주문/슬롯', picking.kpi.진행],
+    ['완료 라인', picking.처리라인], ['남은 라인', picking.전체라인 - picking.처리라인],
+    ['진행률', picking.진행률 + '%']
+  ]);
+  sh.getRange(32, 1, 1, 10).merge().setValue(
+    '속도 ' + (order.피킹.속도 ? order.피킹.속도 + ' 라인/시간' : '데이터 부족') +
+    '  ·  예상 완료 ' + (order.피킹.예상분 === null ? '—' : 표시시간_(order.피킹.예상분)) +
+    '  ·  ' + bar_(picking.진행률, 24)
+  ).setFontFamily('Consolas').setBackground(DASHCOLOR.카드);
+  sh.getRange(34, 1, 1, 10).merge().setValue('최근 오류').setFontWeight('bold')
+    .setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
+  sh.getRange(35, 1, 1, 10).merge().setValue(operation.recentErrors.join(' / ') || '없음')
+    .setWrap(true).setBackground(operation.recentErrors.length ? DASHCOLOR.경고 : DASHCOLOR.좋음);
+  sh.getRange(37, 1, 1, 10).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / '))
     .setWrap(true).setFontWeight('bold').setBackground(order.권고.색);
 
-  sh.getRange(29, 1, 1, 10).merge().setValue('운영').setFontWeight('bold')
-    .setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
-  var opRows = [
-    ['최근 Input 상태', operation.input],
-    ['최근 실패', operation.failure],
-    ['다음 작업', order.권고.제목]
-  ];
-  sh.getRange(30, 1, opRows.length, 2).setValues(opRows);
-  sh.getRange(30, 1, opRows.length, 1).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
-
-  sh.getRange(35, 1, 1, 10).merge().setValue('작업 바로가기 (셀은 버튼이 아닙니다 — 상단 메뉴에서 실행)')
+  sh.getRange(39, 1, 1, 10).merge().setValue('빠른 작업 (셀은 버튼이 아닙니다 — 상단 메뉴에서 실행)')
     .setFontWeight('bold').setBackground(DASHCOLOR.경고);
-  sh.getRange(36, 1, 1, 8).setValues([[
-    '📥 Input 지금 처리', '', '🔄 대시보드 갱신', '', '🖨 작업지시서 출력', '', '⏳ 예약대기 조회', ''
+  sh.getRange(40, 1, 1, 8).setValues([[
+    '파일 입력: Drive Input', '', 'Input 지금 처리', '', '작업지시서 조회/재출력', '', '피킹 결과 지금 반영', ''
   ]]).setFontWeight('bold').setHorizontalAlignment('center').setBackground(DASHCOLOR.카드);
-  [1, 3, 5, 7].forEach(function (col) { sh.getRange(36, col, 1, 2).merge(); });
+  [1, 3, 5, 7].forEach(function (col) { sh.getRange(40, col, 1, 2).merge(); });
 
   for (var c = 1; c <= 10; c++) sh.setColumnWidth(c, c % 2 ? 120 : 90);
   sh.setFrozenRows(2);
@@ -854,53 +862,22 @@ function dashboardSection_(sh, row, title, items) {
 
 function collectOperationStatus_() {
   var sh = consoleSS_().getSheetByName(CONSOLE.입력처리로그);
-  var out = { input: '처리 이력 없음', failure: '없음' };
+  var out = {
+    latestTime: '처리 이력 없음', latestResult: '처리 이력 없음', warning: '없음', recentErrors: []
+  };
   if (!sh || sh.getLastRow() < 2) return out;
   var rows = sh.getRange(2, 1, Math.min(sh.getLastRow() - 1, 50), INPUT_LOG_HEADERS.length).getValues();
-  if (rows.length) out.input = toStr_(rows[0][5]) + ' · ' + toStr_(rows[0][2]) + ' · ' + toStr_(rows[0][0]);
+  if (rows.length) {
+    out.latestTime = rows[0][0] instanceof Date
+      ? Utilities.formatDate(rows[0][0], tz_(), 'yyyy-MM-dd HH:mm:ss') : toStr_(rows[0][0]);
+    out.latestResult = toStr_(rows[0][5]) + ' · ' + toStr_(rows[0][2]);
+  }
   for (var i = 0; i < rows.length; i++) {
     if (toStr_(rows[i][5]) === 'ERROR') {
-      out.failure = toStr_(rows[i][2]) + ' · ' + toStr_(rows[i][6]) + ' · ' + toStr_(rows[i][7]);
-      break;
+      out.recentErrors.push(toStr_(rows[i][2]) + ' · ' + toStr_(rows[i][6]) + ' · ' + toStr_(rows[i][7]));
+      if (out.recentErrors.length >= 3) break;
     }
   }
+  if (toStr_(rows[0][5]) === 'ERROR') out.warning = '최근 Input 처리가 실패했습니다.';
   return out;
-}
-
-/** 예약대기/주문반려는 주문(완료)의 현재 상태를 복사한 읽기 전용 조회 탭이다. */
-function refreshOperationalViews_() {
-  var order = readTable_(ROLE.주문);
-  var indexes = {
-    주문번호: col_(order, COL.주문번호, true),
-    품목별: col_(order, COL.품목별주문번호, true),
-    상품코드: col_(order, COL.상품품목코드, true),
-    상품명: col_(order, COL.상품명, false),
-    수량: col_(order, COL.수량, true),
-    상태: col_(order, COL.주문상태, true),
-    대기사유: col_(order, COL.대기사유, false),
-    취소사유: col_(order, COL.취소사유, false),
-    취소일시: col_(order, COL.취소일시, false)
-  };
-  writeOperationalView_('예약대기',
-    [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.대기사유],
-    order.rows.filter(function (r) { return toStr_(r[indexes.상태]) === ENUM.주문상태.예약대기; })
-      .map(function (r) { return [r[indexes.주문번호], r[indexes.품목별], r[indexes.상품코드],
-        indexes.상품명 >= 0 ? r[indexes.상품명] : '', r[indexes.수량], indexes.대기사유 >= 0 ? r[indexes.대기사유] : '']; }));
-  writeOperationalView_('주문반려',
-    [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.취소사유, COL.취소일시],
-    order.rows.filter(function (r) { return toStr_(r[indexes.상태]) === ENUM.주문상태.취소 &&
-      indexes.취소사유 >= 0 && !isBlank_(r[indexes.취소사유]); })
-      .map(function (r) { return [r[indexes.주문번호], r[indexes.품목별], r[indexes.상품코드],
-        indexes.상품명 >= 0 ? r[indexes.상품명] : '', r[indexes.수량], r[indexes.취소사유],
-        indexes.취소일시 >= 0 ? r[indexes.취소일시] : '']; }));
-}
-
-function writeOperationalView_(name, headers, rows) {
-  var sh = consoleSS_().getSheetByName(name);
-  if (!sh) sh = consoleSS_().insertSheet(name);
-  sh.clearContents();
-  sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
-  if (rows.length) sh.getRange(2, 1, rows.length, headers.length).setValues(rows);
-  sh.setFrozenRows(1);
-  sh.getRange(1, 1).setNote('주문(완료)의 현재 상태에서 자동 생성됩니다. 이 탭을 직접 수정하지 마세요.');
 }

@@ -34,25 +34,27 @@ test('integrated dashboard renderer writes the real dashboard tab and visible ac
   context.Utilities = { formatDate: () => '2026-08-19 10:00:00' };
   context.tz_ = () => 'Asia/Seoul';
   context.renderIntegratedDashboard_(ss,
-    { 접수: 1, 확정: 2, 예약대기: 3, 취소: 4, 출고완료: 5, 전체: 15,
+    { 접수: 1, 확정: 2, 예약대기: 3, 예약품목수: 4, 취소: 4, 출고완료: 5, 전체: 15,
       피킹: { 속도: 20, 예상분: 30 }, 예약목록: [{ 수량: 2, 부족: 0 }],
       권고: { 제목: '주문 확정', 내용: ['확인'], 색: 'FFFFFF' } },
     { 총가용: 100, 총예약: 10, 부족: [1], 품절: 2 },
     { 전체라인: 8, 처리라인: 6, 진행률: 75, kpi: { 대기: 1, 진행: 2 } },
-    { input: 'PROCESSED', failure: '없음' });
+    { latestTime: '2026-08-19 09:55', latestResult: 'PROCESSED · orders.csv', warning: '없음', recentErrors: [] });
   assert.deepEqual(requested, ['📊 대시보드']);
   assert.equal(cells.get('1:1'), '📊  Polar Penguin 통합 대시보드');
-  assert.match(cells.get('35:1'), /셀은 버튼이 아닙니다/);
-  assert.equal(cells.get('36:1'), '📥 Input 지금 처리');
+  assert.equal(cells.get('35:1'), '없음');
+  assert.match(cells.get('39:1'), /셀은 버튼이 아닙니다/);
+  assert.equal(cells.get('40:3'), 'Input 지금 처리');
 });
 
 test('onOpen registers the current menu and every handler exists in source', () => {
   const menuNames = [];
   const handlers = [];
+  const labels = [];
   function menu(name) {
     menuNames.push(name);
     return {
-      addItem(label, handler) { handlers.push(handler); return this; },
+      addItem(label, handler) { labels.push(label); handlers.push(handler); return this; },
       addSubMenu() { return this; }, addSeparator() { return this; }, addToUi() { return this; }
     };
   }
@@ -60,10 +62,20 @@ test('onOpen registers the current menu and every handler exists in source', () 
   context.Logger = { log() {} };
   context.onOpen();
   assert.ok(menuNames.includes('📦 Polar Penguin'));
-  for (const expected of ['processInput', 'S3_1_주문확정', 'S4_1_피킹지시생성', 'S5_2_수동반영',
+  for (const expected of ['processInput', 'S5_2_수동반영',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '운영_예약대기조회', '진단_시트구조',
     'setupSystem', '정리_로그', '설정_캐시초기화']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
+  }
+  for (const internal of ['S1_1_카페24재고동기화', 'S2_1_주문CSV취입', 'S3_1_주문확정', 'S4_1_피킹지시생성']) {
+    assert.equal(handlers.includes(internal), false, `${internal} must stay out of the operator menu`);
+  }
+  for (const expected of ['Input 지금 처리', '작업지시서 조회/재출력', '피킹 결과 지금 반영',
+    '대시보드 갱신', '예약대기 현황', '시스템 상태 확인', '시스템 설치/복구']) {
+    assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
+  }
+  for (const internal of ['카페24 재고 동기화', '주문 CSV 취입', '주문 확정', '피킹지시 생성']) {
+    assert.equal(labels.includes(internal), false, `${internal} must stay out of the operator menu`);
   }
 
   const allSource = fs.readdirSync(path.join(rootPath, 'src')).filter((name) => name.endsWith('.js'))

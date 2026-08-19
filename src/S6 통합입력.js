@@ -8,7 +8,7 @@
  *
  *  처리 순서
  *    Input → 파일 판별/검증 → S1 또는 S2 → S3 → S4 → S9 PDF
- *    성공 원본 → Processed/YYYY-MM-DD, 실패 원본 → Error/YYYY-MM-DD
+ *    성공 원본 → Success/YYYY-MM-DD, 실패 원본 → Error/YYYY-MM-DD
  *
  *  재고 파일을 주문보다 먼저 처리해 예약대기 주문이 최신 재고로 재평가되게 한다.
  *  결과는 작업로그에 기록하고 실패 시 설정의 알림이메일로 Gmail을 발송한 뒤,
@@ -21,7 +21,7 @@ var INPUT_TYPE = { ORDER: 'ORDER', INVENTORY: 'INVENTORY', UNKNOWN: 'UNKNOWN' };
  * 통합 Input 폴더의 모든 파일을 감지해 재고 우선 순서로 처리한다.
  *
  * 파일 하나의 실패가 나머지 파일 처리를 막지 않으며, 전체 처리는 Script Lock으로
- * 직렬화된다. 성공 파일은 Processed, 실패 파일은 Error의 날짜 폴더로 이동한다.
+ * 직렬화된다. 성공 파일은 Success, 실패 파일은 Error의 날짜 폴더로 이동한다.
  *
  * @return {Object} 감지·성공·실패·유형별 건수와 파일별 결과
  * @sideEffect 업무 시트, 입력처리로그, Drive 파일 위치, PDF, Gmail 및 대시보드를 갱신한다.
@@ -29,7 +29,7 @@ var INPUT_TYPE = { ORDER: 'ORDER', INVENTORY: 'INVENTORY', UNKNOWN: 'UNKNOWN' };
 function processInput() {
   return withLock_(function () {
     var inputFolder = inputFolder_('통합Input폴더ID');
-    var processedFolder = inputFolder_('Processed폴더ID');
+    var successFolder = inputFolder_('Success폴더ID');
     var errorFolder = inputFolder_('Error폴더ID');
     var outputFolder = inputFolder_('Output폴더ID');
     var files = [], iterator = inputFolder.getFiles();
@@ -43,7 +43,7 @@ function processInput() {
     var report = { 감지: files.length, 성공: 0, 실패: 0, 주문: 0, 재고: 0, 결과: [] };
     files.forEach(function (file) {
       try {
-        var result = processInputFile_(file, processedFolder, outputFolder);
+        var result = processInputFile_(file, successFolder, outputFolder);
         report.성공++;
         if (result.type === INPUT_TYPE.ORDER) report.주문++;
         if (result.type === INPUT_TYPE.INVENTORY) report.재고++;
@@ -78,7 +78,7 @@ function inputFilePriority_(file) {
   }
 }
 
-function processInputFile_(file, processedFolder, outputFolder) {
+function processInputFile_(file, successFolder, outputFolder) {
   var parsed = readUnifiedInput_(file);
   var fingerprint = inputFingerprint_(file, parsed);
   if (hasProcessedFingerprint_(fingerprint)) {
@@ -96,7 +96,7 @@ function processInputFile_(file, processedFolder, outputFolder) {
   var business = runInputBusiness_(type, file, outputFolder);
   // 업무 반영 뒤 성공 체크섬을 먼저 남겨, 파일 이동만 실패한 경우 재처리로 재고가 중복 반영되지 않게 한다.
   recordInputLog_(file, fingerprint, type, 'PROCESSED', '', inputBusinessMessage_(business));
-  moveInputFile_(file, processedFolder);
+  moveInputFile_(file, successFolder);
   return { type: type, business: business };
 }
 
@@ -161,7 +161,7 @@ function validateInput_(type, data) {
 /** 기존 S1~S4의 재고/주문/피킹 규칙을 그대로 조합하는 오케스트레이터. */
 function runInputBusiness_(type, file, outputFolder) {
   var result = {};
-  if (type === INPUT_TYPE.ORDER) result.ingest = S2_1_주문CSV취입(file, { skipMove: true, silent: true });
+  if (type === INPUT_TYPE.ORDER) result.ingest = S2_1_주문CSV취입(file, { silent: true });
   else if (type === INPUT_TYPE.INVENTORY) result.inventory = S1_1_카페24재고동기화(file, true);
   else throw inputError_('UNKNOWN_TYPE', '지원하지 않는 입력 유형입니다.', type);
 
