@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box}body{font:13px "Malgun Gothic",sans-serif;color:#20242a;margin:0;padding:16px}
+h1{font-size:19px;color:#1f3864;margin:0 0 4px}.sub{color:#667085;margin-bottom:12px}
+table{width:100%;border-collapse:collapse}th,td{border:1px solid #d0d5dd;padding:6px;text-align:left}
+th{background:#e8edf3}button{border:0;border-radius:4px;padding:6px 10px;cursor:pointer;background:#1f3864;color:#fff}
+button.secondary{background:#667085}button:disabled{opacity:.5}.status{font-weight:700}.error{color:#b42318;padding:8px 0}
+.toolbar{display:flex;gap:8px;margin:10px 0}.preview{display:none;position:fixed;inset:0;background:#fff;z-index:5;padding:10px}
+.preview .actions{height:38px;display:flex;gap:8px}.preview iframe{width:100%;height:calc(100% - 40px);border:1px solid #d0d5dd}
+</style></head><body>
+<h1>피킹지시서 조회 / 재출력</h1>
+<div class="sub">지시번호별 상품 총수량과 주문별 포장표를 확인하고 출력합니다.</div>
+<div class="toolbar"><button onclick="load()">새로고침</button></div>
+<div id="message"></div>
+<table><thead><tr><th>피킹지시번호</th><th>생성일시</th><th>주문</th><th>SKU</th><th>총수량</th><th>상태</th><th>PDF</th><th>작업</th></tr></thead><tbody id="rows"></tbody></table>
+<div id="preview" class="preview"><div class="actions"><button onclick="printPreview()">인쇄</button><button class="secondary" onclick="closePreview()">목록으로</button></div><iframe id="frame"></iframe></div>
+<script>
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function fail(e){document.getElementById('message').innerHTML='<div class="error">'+esc(e&&e.message?e.message:e)+'</div>'}
+function load(){document.getElementById('rows').innerHTML='<tr><td colspan="8">불러오는 중…</td></tr>';google.script.run.withSuccessHandler(render).withFailureHandler(fail).getPickingInstructionList()}
+function render(rows){document.getElementById('rows').innerHTML=rows.length?rows.map(r=>`<tr><td><b>${esc(r.instructionNo)}</b></td><td>${esc(r.createdAt)}</td><td>${r.orderCount}건</td><td>${r.skuCount}종</td><td>${r.totalQuantity}개</td><td class="status">${esc(r.state)}</td><td>${r.pdfExists?'있음':'없음'}</td><td><button onclick="openInstruction('${esc(r.instructionNo)}')">열기 / 출력</button> <button class="secondary" onclick="retryPdf('${esc(r.instructionNo)}')">PDF 확인 / 재생성</button></td></tr>`).join(''):'<tr><td colspan="8">피킹지시가 없습니다.</td></tr>'}
+function openInstruction(no){google.script.run.withSuccessHandler(r=>{document.getElementById('frame').srcdoc=r.html;document.getElementById('preview').style.display='block'}).withFailureHandler(fail).preparePickingInstructionOutput(no)}
+function retryPdf(no){google.script.run.withSuccessHandler(r=>{alert(r.메시지);load()}).withFailureHandler(fail).retryPickingInstructionPdf(no)}
+function printPreview(){document.getElementById('frame').contentWindow.print()}function closePreview(){document.getElementById('preview').style.display='none'}load();
+</script></body></html>

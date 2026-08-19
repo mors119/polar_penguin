@@ -1,459 +1,340 @@
 /**
- * ============================================================
- *  S9. 작업지시서 · PDF 생성
- * ============================================================
- *  피킹헤더와 피킹라인을 현장 작업용 지시서로 구성한다. 메뉴에서는 작업자에게
- *  미배정 슬롯을 배정해 인쇄하고, 통합 Input은 새 피킹 배치만 PDF로 보존한다.
+ * S9. 상품 중심 피킹지시서.
  *
- *  PDF 파일 생성 또는 수동 인쇄 화면 준비가 성공한 시점이 fulfillment commit이다.
- *  이때 공용 finalizer가 예약재고를 소진하고 라인/헤더/주문을 자동 완료한다.
- *  이후 문제는 주문 취소 메뉴에서 주문번호 단위로 복원한다.
- * ============================================================
+ * 한 문서는 A) SKU별 창고 피킹 요약과 B) 주문별 포장/송장 확인표로 구성한다.
+ * 카트와 작업자 배정은 창고의 물리 운영에 맡기며 출력 조건으로 사용하지 않는다.
+ * PDF 파일 또는 수동 인쇄 화면이 처음 준비된 뒤 공용 finalizer가 출고를 확정한다.
  */
 
-/** 메뉴 진입점 — 출력 대화상자를 연다 */
 function S9_1_작업지시서출력() {
-  var html = HtmlService.createHtmlOutput(작업지시서_HTML_())
-    .setWidth(900)
-    .setHeight(680);
-  SpreadsheetApp.getUi().showModalDialog(html, '작업지시서 출력');
+  var html = HtmlService.createHtmlOutputFromFile('PickingInstructions').setWidth(1080).setHeight(760);
+  SpreadsheetApp.getUi().showModalDialog(html, '피킹지시서 조회 / 재출력');
 }
 
-/**
- * 미배정 슬롯을 조회한다. (대화상자에서 호출)
- */
-function S9_미배정슬롯조회() {
-  var 헤더 = readTable_(ROLE.헤더);
-  var H = {
-    지시: col_(헤더, COL.피킹지시번호, true),
-    주문: col_(헤더, COL.주문번호, true),
-    슬롯: col_(헤더, COL.카트슬롯, true),
-    품목수: col_(헤더, COL.품목수, true),
-    총수량: col_(헤더, COL.총수량, true),
-    담당: col_(헤더, COL.피킹담당자, true),
-    상태: col_(헤더, COL.상태, true)
-  };
+// HtmlService에서 호출할 공개 endpoint. 계산 함수는 아래의 내부 helper에 둔다.
+function getPickingInstructionList() { return getPickingInstructionList_(); }
+function preparePickingInstructionOutput(instructionNo) { return S9_수동출력준비_(instructionNo); }
+function retryPickingInstructionPdf(instructionNo) { return S9_피킹PDF재시도(instructionNo); }
 
-  var 미배정 = 0, 배정 = {};
-  헤더.rows.forEach(function (r) {
-    var 상태 = toStr_(r[H.상태]);
-    if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.취소) return;
-    var 담당 = toStr_(r[H.담당]);
-    if (담당) 배정[담당] = (배정[담당] || 0) + 1;
-    else 미배정++;
+/** 피킹라인을 SKU별로 합치며 주문 건수는 주문번호 unique count로 센다. */
+function aggregatePickingItems_(items) {
+  var grouped = {};
+  (items || []).forEach(function (item) {
+    var sku = toStr_(item.sku);
+    if (!sku) return;
+    if (!grouped[sku]) grouped[sku] = {
+      location: toStr_(item.location), sku: sku, productName: toStr_(item.productName),
+      option: toStr_(item.option), orderCount: 0, quantity: 0, _orders: {}
+    };
+    var entry = grouped[sku];
+    entry.quantity += toNum_(item.quantity);
+    entry._orders[toStr_(item.orderNo)] = true;
+    if (!entry.location && item.location) entry.location = toStr_(item.location);
   });
-
-  return {
-    미배정: 미배정,
-    배정: Object.keys(배정).map(function (k) { return { 이름: k, 슬롯: 배정[k] }; })
-  };
+  var result = Object.keys(grouped).map(function (sku) {
+    var entry = grouped[sku];
+    entry.orderCount = Object.keys(entry._orders).filter(String).length;
+    delete entry._orders;
+    if (!entry.location) entry.location = '(위치 미지정)';
+    return entry;
+  });
+  result.sort(function (a, b) {
+    var aMissing = a.location === '(위치 미지정)', bMissing = b.location === '(위치 미지정)';
+    if (aMissing !== bMissing) return aMissing ? 1 : -1;
+    var location = a.location.localeCompare(b.location); if (location) return location;
+    var sku = a.sku.localeCompare(b.sku); if (sku) return sku;
+    return (a.productName + ' ' + a.option).localeCompare(b.productName + ' ' + b.option);
+  });
+  return result;
 }
 
-/**
- * 작업지시서를 만든다.
- * @param {String} 이름  작업자 이름
- * @param {Number} 개수  가져갈 슬롯 수 (0이면 이미 배정된 것만 재출력)
- * @param {{readOnly:Boolean=, 지시번호:String=}=} options PDF용 조회는 담당자/출력일시를 변경하지 않는다.
- * @return {Object} 작업자, 출력시각, 슬롯·품목·수량 정보 또는 오류 메시지
- * @sideEffect readOnly가 아니면 새 슬롯의 피킹담당자와 출력일시를 기록한다.
- */
-function S9_지시서생성(이름, 개수, options) {
-  return withLock_(function () {
-    options = options || {};
-    이름 = String(이름 || '').trim();
-    if (!이름 && !options.readOnly) throw new Error('작업자 이름을 입력하세요.');
-    if (!이름) 이름 = '자동 생성';
-    개수 = Number(개수) || 0;
-
-    var 헤더 = readTable_(ROLE.헤더);
-    var H = {
-      지시: col_(헤더, COL.피킹지시번호, true),
-      주문: col_(헤더, COL.주문번호, true),
-      슬롯: col_(헤더, COL.카트슬롯, true),
-      품목수: col_(헤더, COL.품목수, true),
-      총수량: col_(헤더, COL.총수량, true),
-      담당: col_(헤더, COL.피킹담당자, true),
-      상태: col_(헤더, COL.상태, true),
-      출력일시: col_(헤더, COL.출력일시, false)
-    };
-
-    // ---------- 이미 이 사람에게 배정된 미완료 슬롯 ----------
-    var 내슬롯 = [];
-    헤더.rows.forEach(function (r, i) {
-      var 상태 = toStr_(r[H.상태]);
-      if (상태 === ENUM.헤더상태.취소) return;
-      if (상태 === ENUM.헤더상태.완료 && !(options.readOnly && options.지시번호)) return;
-      if (options.지시번호 && toStr_(r[H.지시]) !== String(options.지시번호)) return;
-      if (options.readOnly || toStr_(r[H.담당]) === 이름) 내슬롯.push(i);
-    });
-
-    // ---------- 추가 배정 ----------
-    var 신규배정 = 0;
-    if (개수 > 0 && !options.readOnly) {
-      var 후보 = [];
-      헤더.rows.forEach(function (r, i) {
-        var 상태 = toStr_(r[H.상태]);
-        if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.취소) return;
-        if (!isBlank_(r[H.담당])) return;
-        후보.push({ idx: i, 슬롯: toNum_(r[H.슬롯]) });
-      });
-      후보.sort(function (a, b) { return a.슬롯 - b.슬롯; });   // 슬롯 번호 순
-
-      후보.slice(0, 개수).forEach(function (c) {
-        헤더.rows[c.idx][H.담당] = 이름;
-        if (H.출력일시 >= 0) 헤더.rows[c.idx][H.출력일시] = new Date();
-        내슬롯.push(c.idx);
-        신규배정++;
-      });
-
-      if (신규배정) {
-        writeColumn_(헤더.sheet, H.담당, 헤더.rows);
-        if (H.출력일시 >= 0) writeColumn_(헤더.sheet, H.출력일시, 헤더.rows);
-      }
-    }
-
-    if (!내슬롯.length) {
-      return { 오류: '배정된 슬롯이 없습니다. 가져갈 슬롯 수를 지정하고 다시 시도하세요.' };
-    }
-
-    // ---------- 라인 조회 ----------
-    var 주문 = readTable_(ROLE.주문);
-    var O = {
-      주문번호: col_(주문, COL.주문번호, true),
-      품목별: col_(주문, COL.품목별주문번호, true)
-    };
-    var 품목별_주문 = {};
-    주문.rows.forEach(function (r) {
-      var k = toStr_(r[O.품목별]);
-      if (k) 품목별_주문[k] = toStr_(r[O.주문번호]);
-    });
-
-    var 라인 = readTable_(ROLE.라인);
-    var L = {
-      순번: col_(라인, COL.순번, true),
-      보관위치: col_(라인, COL.보관위치, true),
-      상품코드: col_(라인, COL.상품코드, true),
-      상품명: col_(라인, COL.상품명, true),
-      옵션: col_(라인, COL.옵션, true),
-      필요수량: col_(라인, COL.필요수량, true),
-      품목별: col_(라인, COL.품목별주문번호, true),
-      라인상태: col_(라인, COL.라인상태, true)
-    };
-
-    var 주문별라인 = {};
-    라인.rows.forEach(function (r) {
-      var no = 품목별_주문[toStr_(r[L.품목별])];
-      if (!no) return;
-      if (toStr_(r[L.라인상태]) === ENUM.라인상태.취소) return;
-      (주문별라인[no] = 주문별라인[no] || []).push({
-        순번: toNum_(r[L.순번]),
-        위치: toStr_(r[L.보관위치]) || '(위치 미지정)',
-        코드: toStr_(r[L.상품코드]),
-        상품명: toStr_(r[L.상품명]),
-        옵션: toStr_(r[L.옵션]) === '-' ? '' : toStr_(r[L.옵션]),
-        수량: toNum_(r[L.필요수량])
-      });
-    });
-
-    // ---------- 지시서 구성 ----------
-    var 슬롯목록 = 내슬롯.map(function (i) {
-      var r = 헤더.rows[i];
-      var no = toStr_(r[H.주문]);
-      var items = (주문별라인[no] || []).slice()
-        .sort(function (a, b) { return a.순번 - b.순번; });
-      return {
-        슬롯: toNum_(r[H.슬롯]),
-        주문번호: no,
-        품목수: items.length,
-        총수량: items.reduce(function (a, x) { return a + x.수량; }, 0),
-        품목: items
+/** 고객 메타데이터와 품목별 피킹라인을 주문번호 단위로 결합한다. */
+function buildPackingOrders_(orderMeta, items) {
+  var grouped = {};
+  (items || []).forEach(function (item) {
+    var no = toStr_(item.orderNo); if (!no) return;
+    if (!grouped[no]) {
+      var meta = orderMeta[no] || {};
+      grouped[no] = {
+        orderNo: no, orderDate: meta.orderDate || '', orderDateText: meta.orderDateText || '',
+        recipient: meta.recipient || '', phoneLast4: meta.phoneLast4 || '', postalCode: meta.postalCode || '',
+        address: meta.address || '', message: meta.message || '', items: []
       };
-    }).filter(function (s) { return s.품목.length > 0; })
-      .sort(function (a, b) { return a.슬롯 - b.슬롯; });
-
-    if (!슬롯목록.length) {
-      return { 오류: '출력할 품목이 없습니다. 배정된 슬롯이 모두 처리되었습니다.' };
     }
-
-    var finalizations = [];
-    if (!options.readOnly) {
-      var instructions = {};
-      내슬롯.forEach(function (idx) {
-        var instructionNo = toStr_(헤더.rows[idx][H.지시]);
-        (instructions[instructionNo] = instructions[instructionNo] || []).push(toStr_(헤더.rows[idx][H.주문]));
-      });
-      Object.keys(instructions).filter(String).forEach(function (instructionNo) {
-        finalizations.push(finalizePickingAfterOutput_(instructionNo,
-          { refresh: false, source: 'MANUAL_OUTPUT', orderNos: instructions[instructionNo] }));
-      });
-      try { D0_대시보드전체갱신(true); } catch (ignore) { }
-    }
-    writeOpLog_('S9_지시서생성', '성공', 이름 + ' / 슬롯 ' + 슬롯목록.length + '개 / 신규배정 ' + 신규배정);
-
-    return {
-      이름: 이름,
-      출력시각: Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm'),
-      신규배정: 신규배정,
-      슬롯: 슬롯목록,
-      총품목: 슬롯목록.reduce(function (a, s) { return a + s.품목수; }, 0),
-      총수량: 슬롯목록.reduce(function (a, s) { return a + s.총수량; }, 0),
-      출고확정: finalizations
-    };
+    grouped[no].items.push({
+      itemOrderNo: toStr_(item.itemOrderNo), sku: toStr_(item.sku),
+      productName: toStr_(item.productName), option: toStr_(item.option), quantity: toNum_(item.quantity)
+    });
   });
+  var result = Object.keys(grouped).map(function (no) {
+    grouped[no].items.sort(function (a, b) { return a.itemOrderNo.localeCompare(b.itemOrderNo); });
+    return grouped[no];
+  });
+  result.sort(function (a, b) {
+    var ad = S9_sortDate_(a.orderDate), bd = S9_sortDate_(b.orderDate);
+    if (ad !== bd) return ad < bd ? -1 : 1;
+    return a.orderNo.localeCompare(b.orderNo);
+  });
+  return result;
 }
 
-/**
- * 신규 피킹 배치를 Output/YYYY-MM-DD에 PDF로 보존한다.
- * Output 바로 아래와 날짜 하위 폴더에서 같은 지시번호의 PDF를 먼저 찾아 재실행을 안전하게 한다.
- *
- * @param {string} 지시번호 PDF로 만들 피킹지시번호
- * @param {GoogleAppsScript.Drive.Folder=} outputRoot Output 폴더. 생략하면 설정값을 사용한다.
- * @return {Object} 생성 또는 기존 파일 재사용 결과
- * @sideEffect 신규인 경우에만 Drive에 PDF를 만들고 작업로그를 기록한다.
- */
-function S9_피킹PDF생성(지시번호, outputRoot) {
-  if (!지시번호) return { 생성: false, 사유: '지시번호 없음' };
+/** HTML과 PDF가 공유하는 순수 문서 DTO를 만든다. */
+function buildPickingDocumentData_(instructionNo) {
+  instructionNo = toStr_(instructionNo);
+  if (!instructionNo) throw new Error('피킹지시번호를 입력하세요.');
+
+  var headers = readTable_(ROLE.헤더);
+  var H = {
+    instruction: col_(headers, COL.피킹지시번호, true), orderNo: col_(headers, COL.주문번호, true),
+    state: col_(headers, COL.상태, true), createdAt: S9_optionalColumn_(headers, [COL.생성일시]),
+    outputAt: S9_optionalColumn_(headers, [COL.출력일시])
+  };
+  var selectedOrders = {}, createdAt = '', foundHeader = false;
+  headers.rows.forEach(function (row) {
+    if (toStr_(row[H.instruction]) !== instructionNo) return;
+    foundHeader = true;
+    if (toStr_(row[H.state]) === ENUM.헤더상태.취소) return;
+    selectedOrders[toStr_(row[H.orderNo])] = true;
+    if (!createdAt && H.createdAt >= 0 && !isBlank_(row[H.createdAt])) createdAt = row[H.createdAt];
+    if (!createdAt && H.outputAt >= 0 && !isBlank_(row[H.outputAt])) createdAt = row[H.outputAt];
+  });
+  if (!foundHeader) throw new Error('피킹지시번호를 찾을 수 없습니다: ' + instructionNo);
+
+  var orders = readTable_(ROLE.주문);
+  var O = {
+    orderNo: col_(orders, COL.주문번호, true), itemNo: col_(orders, COL.품목별주문번호, true),
+    orderDate: S9_optionalColumn_(orders, ['주문일시', '주문일자', '주문일', '결제일시']),
+    recipient: S9_optionalColumn_(orders, ['수령인', '수령인명', '수령인 이름']),
+    phone: S9_optionalColumn_(orders, ['수령인 휴대전화', '수령인 휴대폰', '수령인휴대전화', '휴대전화']),
+    postal: S9_optionalColumn_(orders, ['수령인 우편번호', '수령인우편번호', '우편번호']),
+    address: S9_optionalColumn_(orders, ['수령인 주소', '수령인 주소(전체)', '수령인주소', '기본주소']),
+    detailAddress: S9_optionalColumn_(orders, ['상세주소', '수령인 상세주소']),
+    message: S9_optionalColumn_(orders, ['배송메시지', '배송 메세지', '배송 요청사항'])
+  };
+  var itemOrder = {}, orderMeta = {};
+  orders.rows.forEach(function (row) {
+    var no = toStr_(row[O.orderNo]);
+    itemOrder[toStr_(row[O.itemNo])] = no;
+    if (!selectedOrders[no] || orderMeta[no]) return;
+    var phone = O.phone >= 0 ? toStr_(row[O.phone]).replace(/\D/g, '') : '';
+    var address = O.address >= 0 ? toStr_(row[O.address]) : '';
+    var detail = O.detailAddress >= 0 ? toStr_(row[O.detailAddress]) : '';
+    orderMeta[no] = {
+      orderDate: O.orderDate >= 0 ? row[O.orderDate] : '',
+      orderDateText: O.orderDate >= 0 ? S9_formatDateTime_(row[O.orderDate]) : '',
+      recipient: O.recipient >= 0 ? toStr_(row[O.recipient]) : '',
+      phoneLast4: phone ? phone.slice(-4) : '', postalCode: O.postal >= 0 ? toStr_(row[O.postal]) : '',
+      address: [address, detail].filter(String).join(' '), message: O.message >= 0 ? toStr_(row[O.message]) : ''
+    };
+  });
+
+  var lines = readTable_(ROLE.라인);
+  var L = {
+    instruction: col_(lines, COL.피킹지시번호, true), orderNo: S9_optionalColumn_(lines, [COL.주문번호]),
+    itemNo: col_(lines, COL.품목별주문번호, true), sku: col_(lines, COL.상품코드, true),
+    location: col_(lines, COL.보관위치, true), name: col_(lines, COL.상품명, true),
+    option: col_(lines, COL.옵션, true), quantity: col_(lines, COL.필요수량, true),
+    state: col_(lines, COL.라인상태, true)
+  };
+  var items = [];
+  lines.rows.forEach(function (row) {
+    if (toStr_(row[L.instruction]) !== instructionNo || toStr_(row[L.state]) === ENUM.라인상태.취소) return;
+    var no = (L.orderNo >= 0 ? toStr_(row[L.orderNo]) : '') || itemOrder[toStr_(row[L.itemNo])];
+    if (!selectedOrders[no]) return;
+    items.push({
+      orderNo: no, itemOrderNo: toStr_(row[L.itemNo]), location: toStr_(row[L.location]),
+      sku: toStr_(row[L.sku]), productName: toStr_(row[L.name]),
+      option: toStr_(row[L.option]) === '-' ? '' : toStr_(row[L.option]), quantity: toNum_(row[L.quantity])
+    });
+  });
+  if (!items.length) throw new Error('출력할 피킹 품목이 없습니다: ' + instructionNo);
+
+  var pickSummary = aggregatePickingItems_(items), packingOrders = buildPackingOrders_(orderMeta, items);
+  var totalQuantity = pickSummary.reduce(function (sum, item) { return sum + item.quantity; }, 0);
+  return {
+    instructionNo: instructionNo, title: instructionNo.indexOf('-RES-') >= 0 ? '예약 피킹지시서' : '피킹지시서',
+    createdAt: S9_formatDateTime_(createdAt || new Date()),
+    summary: { orderCount: packingOrders.length, skuCount: pickSummary.length, totalQuantity: totalQuantity },
+    missingLocationCount: pickSummary.filter(function (item) { return item.location === '(위치 미지정)'; }).length,
+    pickSummary: pickSummary, orders: packingOrders,
+    hasAddress: packingOrders.some(function (order) { return !!order.address; }),
+    hasMessage: packingOrders.some(function (order) { return !!order.message; })
+  };
+}
+
+/** A4 landscape용 compact HTML. 자동 PDF와 수동 출력이 이 템플릿을 함께 쓴다. */
+function renderPickingDocumentHTML_(data) {
+  var e = S9_escapeHtml_, parts = [
+    '<!doctype html><html><head><meta charset="utf-8"><style>',
+    '@page{size:A4 landscape;margin:6mm 7mm}*{box-sizing:border-box}',
+    'body{font-family:"Malgun Gothic",Arial,sans-serif;color:#20242a;font-size:8.5pt;line-height:1.2;margin:0}',
+    'h1{font-size:14pt;margin:0 0 2px}.meta{font-size:9pt;margin-bottom:5px}.warn{color:#b42318;font-weight:700}',
+    'h2{font-size:10pt;margin:7px 0 3px;padding:3px 5px;background:#1f3864;color:#fff}',
+    'table{width:100%;border-collapse:collapse;table-layout:fixed;margin-bottom:5px}',
+    'thead{display:table-header-group}th{background:#e8edf3;font-size:8pt;font-weight:700}',
+    'th,td{border:1px solid #9da7b3;padding:2px 3px;vertical-align:top;word-break:break-word}',
+    '.num{text-align:right;font-weight:700}.center{text-align:center}.sku{font-family:Consolas,monospace}',
+    '.missing{background:#fff1f0;color:#b42318;font-weight:700}.address,.message{font-size:7.5pt}',
+    'tr{page-break-inside:avoid}</style></head><body>',
+    '<h1>', e(data.title), ' &nbsp; ', e(data.instructionNo), '</h1>',
+    '<div class="meta">', e(data.createdAt), ' &nbsp;·&nbsp; 주문 ', data.summary.orderCount,
+    '건 &nbsp;·&nbsp; SKU ', data.summary.skuCount, '종 &nbsp;·&nbsp; 총 ', data.summary.totalQuantity, '개',
+    data.missingLocationCount ? ' &nbsp;·&nbsp; <span class="warn">위치 미지정 상품 ' + data.missingLocationCount + '종</span>' : '',
+    '</div><h2>창고 피킹 요약</h2>',
+    '<table><thead><tr><th style="width:13%">보관위치</th><th style="width:17%">상품코드 / SKU</th>',
+    '<th>상품명</th><th style="width:16%">옵션</th><th style="width:9%">주문 건수</th><th style="width:9%">총 필요수량</th>',
+    '</tr></thead><tbody>'
+  ];
+  data.pickSummary.forEach(function (item) {
+    var missing = item.location === '(위치 미지정)';
+    parts.push('<tr><td class="', missing ? 'missing' : '', '">', missing ? '⚠ ' : '', e(item.location),
+      '</td><td class="sku">', e(item.sku), '</td><td>', e(item.productName), '</td><td>', e(item.option || '-'),
+      '</td><td class="center">', item.orderCount, '</td><td class="num">', item.quantity, '</td></tr>');
+  });
+  parts.push('</tbody></table><h2>주문별 포장 / 송장 확인</h2><table><thead><tr>',
+    '<th style="width:10%">주문일시</th><th style="width:12%">주문번호</th><th style="width:8%">수령인</th>',
+    '<th style="width:6%">전화 끝4</th><th style="width:7%">우편번호</th><th>상품명</th>',
+    '<th style="width:11%">옵션</th><th style="width:5%">수량</th>');
+  if (data.hasAddress) parts.push('<th style="width:18%">배송주소</th>');
+  if (data.hasMessage) parts.push('<th style="width:14%">배송메시지</th>');
+  parts.push('</tr></thead><tbody>');
+  data.orders.forEach(function (order) {
+    order.items.forEach(function (item) {
+      parts.push('<tr><td>', e(order.orderDateText), '</td><td>', e(order.orderNo), '</td><td>', e(order.recipient),
+        '</td><td class="center">', e(order.phoneLast4), '</td><td>', e(order.postalCode), '</td><td>', e(item.productName),
+        '</td><td>', e(item.option || '-'), '</td><td class="num">', item.quantity, '</td>');
+      if (data.hasAddress) parts.push('<td class="address">', e(order.address), '</td>');
+      if (data.hasMessage) parts.push('<td class="message">', e(order.message), '</td>');
+      parts.push('</tr>');
+    });
+  });
+  parts.push('</tbody></table></body></html>');
+  return parts.join('');
+}
+
+function S9_피킹PDF생성(instructionNo, outputRoot) {
+  instructionNo = toStr_(instructionNo);
+  if (!instructionNo) return { 생성: false, 사유: '지시번호 없음' };
   outputRoot = outputRoot || DriveApp.getFolderById(String(param_('Output폴더ID', '')));
+  var fileName = instructionNo + '.pdf', existing = S9_findPDFFile_(outputRoot, fileName);
+  if (existing) return { 생성: false, 재사용: true, 파일명: fileName, 파일ID: existing.getId ? existing.getId() : '',
+    출고확정: finalizePickingAfterOutput_(instructionNo, { refresh: false, source: 'PDF_REUSE' }) };
 
-  var fileName = String(지시번호) + '.pdf';
-  if (S9_findPDF_(outputRoot, fileName)) {
-    return { 생성: false, 재사용: true, 파일명: fileName,
-      출고확정: finalizePickingAfterOutput_(지시번호, { refresh: false, source: 'PDF_REUSE' }) };
-  }
-  var dateName = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
-  var dateFolder = getOrCreateSubFolder_(outputRoot, dateName);
-
-  var data = S9_지시서생성('', 0, { readOnly: true, 지시번호: 지시번호 });
-  if (data.오류) throw new Error(data.오류);
-  var html = S9_PDFHTML_(data, 지시번호);
+  var data = buildPickingDocumentData_(instructionNo);
+  var html = renderPickingDocumentHTML_(data);
   var pdf = HtmlService.createHtmlOutput(html).getBlob().getAs(MimeType.PDF).setName(fileName);
+  var dateFolder = getOrCreateSubFolder_(outputRoot, Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd'));
   var file = dateFolder.createFile(pdf);
-  var finalization = finalizePickingAfterOutput_(지시번호, { refresh: false, source: 'PDF_OUTPUT' });
-  writeOpLog_('S9_피킹PDF생성', '성공', fileName);
+  var finalization = finalizePickingAfterOutput_(instructionNo, { refresh: false, source: 'PDF_OUTPUT' });
+  writeOpLog_('S9_피킹PDF생성', '성공', fileName + ' / SKU ' + data.summary.skuCount + ' / 수량 ' + data.summary.totalQuantity);
   return { 생성: true, 파일ID: file.getId(), 파일명: fileName, 출고확정: finalization };
 }
 
-/** 출력오류 또는 누락 PDF를 같은 지시번호로 복구한다. 재고와 피킹행은 만들지 않는다. */
-function S9_피킹PDF재시도(지시번호) {
-  지시번호 = toStr_(지시번호);
-  if (!지시번호) throw new Error('피킹지시번호를 입력하세요.');
-  var orders = S9_ordersForInstruction_(지시번호);
-  if (!orders.length) throw new Error('피킹지시번호를 찾을 수 없습니다: ' + 지시번호);
+/** 수동 화면의 첫 출력과 재출력도 동일 DTO/HTML/finalizer를 사용한다. */
+function S9_수동출력준비_(instructionNo) {
+  return withLock_(function () {
+    var data = buildPickingDocumentData_(instructionNo), html = renderPickingDocumentHTML_(data);
+    var finalization = finalizePickingAfterOutput_(instructionNo, { refresh: false, source: 'MANUAL_OUTPUT' });
+    try { D0_대시보드전체갱신(true); } catch (ignore) { }
+    writeOpLog_('S9_수동출력준비_', '성공', instructionNo + ' / ' + (finalization.이미완료 ? '재출력' : '첫 출력'));
+    return { html: html, summary: data.summary, 이미완료: finalization.이미완료 };
+  });
+}
+
+function S9_피킹PDF재시도(instructionNo) {
+  instructionNo = toStr_(instructionNo);
+  if (!instructionNo) throw new Error('피킹지시번호를 입력하세요.');
+  if (!S9_ordersForInstruction_(instructionNo).length) throw new Error('피킹지시번호를 찾을 수 없습니다: ' + instructionNo);
   try {
-    var result = S9_피킹PDF생성(지시번호, inputFolder_('Output폴더ID'));
+    var result = S9_피킹PDF생성(instructionNo, inputFolder_('Output폴더ID'));
     D0_대시보드전체갱신(true);
-    return { 메시지: (result.재사용 ? '기존 PDF를 확인했습니다.' : 'PDF를 다시 생성했습니다.') + ' ' + 지시번호 };
+    return { 메시지: (result.재사용 ? '기존 PDF를 확인했습니다.' : 'PDF를 다시 생성했습니다.') + ' ' + instructionNo };
   } catch (e) {
-    markPickingOutputState_(지시번호, ENUM.헤더상태.출력오류); throw e;
+    markPickingOutputState_(instructionNo, ENUM.헤더상태.출력오류); throw e;
   }
 }
 
+/** 조회 화면용 최근 지시 목록. 카트/작업자 정보는 반환하지 않는다. */
+function getPickingInstructionList_() {
+  var headers = readTable_(ROLE.헤더), lines = readTable_(ROLE.라인);
+  var H = { instruction: col_(headers, COL.피킹지시번호, true), orderNo: col_(headers, COL.주문번호, true),
+    state: col_(headers, COL.상태, true), createdAt: S9_optionalColumn_(headers, [COL.생성일시]),
+    outputAt: S9_optionalColumn_(headers, [COL.출력일시]) };
+  var L = { instruction: col_(lines, COL.피킹지시번호, true), sku: col_(lines, COL.상품코드, true),
+    qty: col_(lines, COL.필요수량, true), state: col_(lines, COL.라인상태, true) };
+  var grouped = {};
+  headers.rows.forEach(function (row) {
+    var no = toStr_(row[H.instruction]); if (!no) return;
+    if (!grouped[no]) grouped[no] = { instructionNo: no, createdAt: '', orders: {}, skus: {}, totalQuantity: 0, states: {} };
+    grouped[no].orders[toStr_(row[H.orderNo])] = true; grouped[no].states[toStr_(row[H.state])] = true;
+    if (!grouped[no].createdAt && H.createdAt >= 0 && !isBlank_(row[H.createdAt])) grouped[no].createdAt = S9_formatDateTime_(row[H.createdAt]);
+    if (!grouped[no].createdAt && H.outputAt >= 0 && !isBlank_(row[H.outputAt])) grouped[no].createdAt = S9_formatDateTime_(row[H.outputAt]);
+  });
+  lines.rows.forEach(function (row) {
+    var no = toStr_(row[L.instruction]); if (!grouped[no] || toStr_(row[L.state]) === ENUM.라인상태.취소) return;
+    grouped[no].skus[toStr_(row[L.sku])] = true; grouped[no].totalQuantity += toNum_(row[L.qty]);
+  });
+  var pdfNames = S9_existingPDFNames_();
+  return Object.keys(grouped).sort().reverse().slice(0, 100).map(function (no) {
+    var item = grouped[no], state = item.states[ENUM.헤더상태.출력오류] ? ENUM.헤더상태.출력오류 :
+      (item.states[ENUM.헤더상태.대기] ? ENUM.헤더상태.대기 :
+        (item.states[ENUM.헤더상태.완료] ? ENUM.헤더상태.완료 : ENUM.헤더상태.취소));
+    return { instructionNo: no, createdAt: item.createdAt || '-', orderCount: Object.keys(item.orders).filter(String).length,
+      skuCount: Object.keys(item.skus).filter(String).length, totalQuantity: item.totalQuantity,
+      state: state, pdfExists: !!pdfNames[no + '.pdf'] };
+  });
+}
+
 function S9_ordersForInstruction_(instructionNo) {
-  var table = readTable_(ROLE.헤더), cInstruction = col_(table, COL.피킹지시번호, true), cOrder = col_(table, COL.주문번호, true), found = {};
+  var table = readTable_(ROLE.헤더), cInstruction = col_(table, COL.피킹지시번호, true);
+  var cOrder = col_(table, COL.주문번호, true), found = {};
   table.rows.forEach(function (row) { if (toStr_(row[cInstruction]) === instructionNo) found[toStr_(row[cOrder])] = true; });
   return Object.keys(found).filter(String);
 }
 
-function S9_findPDF_(outputRoot, fileName) {
-  if (outputRoot.getFilesByName(fileName).hasNext()) return true;
+function S9_findPDFFile_(outputRoot, fileName) {
+  var direct = outputRoot.getFilesByName(fileName); if (direct.hasNext()) return direct.next();
   var folders = outputRoot.getFolders();
   while (folders.hasNext()) {
-    if (folders.next().getFilesByName(fileName).hasNext()) return true;
+    var files = folders.next().getFilesByName(fileName); if (files.hasNext()) return files.next();
   }
-  return false;
+  return null;
 }
 
-function S9_PDFHTML_(data, 지시번호) {
-  var parts = ['<!doctype html><html><head><meta charset="utf-8"><style>',
-    'body{font-family:sans-serif;color:#222}h1{font-size:22px}h2{background:#1F3864;color:#fff;padding:8px}',
-    'table{width:100%;border-collapse:collapse;margin-bottom:18px}th,td{border:1px solid #aaa;padding:6px}',
-    'th{background:#E8EDF3}.qty{text-align:center;font-weight:bold}.loc{font-weight:bold}',
-    '</style></head><body><h1>피킹 작업지시서 ', S9_escapeHtml_(지시번호), '</h1>',
-    '<p>생성 ', S9_escapeHtml_(data.출력시각), ' · 슬롯 ', data.슬롯.length, '개 · 총 ', data.총수량, '개</p>'];
-  data.슬롯.forEach(function (slot) {
-    parts.push('<h2>카트 슬롯 ', slot.슬롯, ' · ', S9_escapeHtml_(slot.주문번호), '</h2>',
-      '<table><tr><th>No</th><th>보관위치</th><th>상품코드</th><th>상품명 / 옵션</th><th>수량</th></tr>');
-    slot.품목.forEach(function (item) {
-      parts.push('<tr><td>', item.순번, '</td><td class="loc">', S9_escapeHtml_(item.위치),
-        '</td><td>', S9_escapeHtml_(item.코드), '</td><td>', S9_escapeHtml_(item.상품명),
-        item.옵션 ? ' / ' + S9_escapeHtml_(item.옵션) : '', '</td><td class="qty">', item.수량,
-        '</td></tr>');
-    });
-    parts.push('</table>');
-  });
-  parts.push('</body></html>');
-  return parts.join('');
+function S9_existingPDFNames_() {
+  var names = {};
+  try {
+    var root = inputFolder_('Output폴더ID'), files = root.getFiles();
+    while (files.hasNext()) names[files.next().getName()] = true;
+    var folders = root.getFolders();
+    while (folders.hasNext()) {
+      files = folders.next().getFiles(); while (files.hasNext()) names[files.next().getName()] = true;
+    }
+  } catch (ignore) { }
+  return names;
+}
+
+function S9_optionalColumn_(table, names) {
+  for (var i = 0; i < names.length; i++) {
+    var exact = table.headerIndex ? table.headerIndex[normKey_(names[i])] : undefined;
+    if (exact !== undefined) return exact;
+    var found = col_(table, names[i], false); if (found >= 0) return found;
+  }
+  return -1;
+}
+
+function S9_sortDate_(value) {
+  if (value instanceof Date) return value.getTime();
+  var parsed = Date.parse(toStr_(value)); return isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
+}
+
+function S9_formatDateTime_(value) {
+  if (value instanceof Date) return Utilities.formatDate(value, tz_(), 'yyyy-MM-dd HH:mm');
+  return toStr_(value);
 }
 
 function S9_escapeHtml_(value) {
   return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
     return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-  });
-}
-
-/** 대화상자 HTML */
-function 작업지시서_HTML_() {
-  return [
-'<!DOCTYPE html><html><head><meta charset="utf-8"><style>',
-'  * { box-sizing: border-box; }',
-'  body { font-family: "Malgun Gothic", sans-serif; margin: 0; padding: 16px; color: #222; }',
-'  h2 { margin: 0 0 4px; font-size: 18px; color: #1F3864; }',
-'  .sub { color: #777; font-size: 12px; margin-bottom: 14px; }',
-'  .panel { background: #F2F6FA; border: 1px solid #BFC9D4; border-radius: 6px; padding: 14px; margin-bottom: 14px; }',
-'  label { font-size: 13px; font-weight: bold; margin-right: 6px; }',
-'  input[type=text], input[type=number] { padding: 7px 9px; border: 1px solid #BFC9D4; border-radius: 4px; font-size: 14px; }',
-'  input[type=text] { width: 150px; }',
-'  input[type=number] { width: 70px; }',
-'  button { padding: 8px 18px; border: 0; border-radius: 4px; font-size: 14px; cursor: pointer; }',
-'  .primary { background: #2E5C8A; color: #fff; }',
-'  .print { background: #1F3864; color: #fff; }',
-'  button:disabled { background: #ccc; cursor: default; }',
-'  .info { font-size: 12px; color: #555; margin-top: 10px; line-height: 1.6; }',
-'  .err { color: #B03A2E; font-weight: bold; padding: 10px 0; }',
-'  #out { margin-top: 10px; }',
-'  .slot { border: 2px solid #1F3864; border-radius: 6px; margin-bottom: 16px; page-break-inside: avoid; }',
-'  .slothead { background: #1F3864; color: #fff; padding: 8px 12px; font-weight: bold; font-size: 15px;',
-'              display: flex; justify-content: space-between; }',
-'  table { width: 100%; border-collapse: collapse; font-size: 13px; }',
-'  th { background: #E8EDF3; padding: 6px; border: 1px solid #BFC9D4; font-size: 12px; }',
-'  td { padding: 7px 6px; border: 1px solid #D6DCE4; }',
-'  .loc { font-weight: bold; font-size: 15px; font-family: Consolas, monospace; }',
-'  .qty { text-align: center; font-weight: bold; font-size: 16px; }',
-'  .hdr { border-bottom: 3px solid #1F3864; padding-bottom: 8px; margin-bottom: 14px; }',
-'  .hdr h1 { margin: 0; font-size: 21px; }',
-'  .hdr .meta { font-size: 13px; color: #555; margin-top: 4px; }',
-'  .note { font-size: 12px; color: #B03A2E; margin: 8px 0 14px; }',
-'  @media print {',
-'    .noprint { display: none !important; }',
-'    body { padding: 0; }',
-'    .slot { page-break-inside: avoid; }',
-'  }',
-'</style></head><body>',
-
-'<div class="noprint">',
-'  <h2>작업지시서 출력</h2>',
-'  <div class="sub">이름을 넣고 가져갈 슬롯 수를 정하면, 미배정 슬롯이 순서대로 배정됩니다.</div>',
-'  <div class="panel">',
-'    <label>작업자 이름</label><input type="text" id="name" placeholder="예: 김서연">',
-'    &nbsp;&nbsp;<label>가져갈 슬롯</label><input type="number" id="cnt" value="5" min="0" max="50">',
-'    &nbsp;&nbsp;<button class="primary" id="go">불러오기</button>',
-'    <div class="info" id="status">현황을 불러오는 중…</div>',
-'  </div>',
-'  <div class="panel">',
-'    <label>PDF 조회/복구</label><input type="text" id="instruction" placeholder="예: PK-20260819-001">',
-'    &nbsp;&nbsp;<button class="primary" id="retry">PDF 확인/재생성</button>',
-'  </div>',
-'  <div id="msg"></div>',
-'</div>',
-'<div id="out"></div>',
-
-'<script>',
-'function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){',
-'  return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];});}',
-'',
-'google.script.run.withSuccessHandler(function(d){',
-'  var t = "미배정 슬롯 <b>" + d.미배정 + "개</b>";',
-'  if (d.배정.length) {',
-'    t += "<br>배정됨 — " + d.배정.map(function(w){return esc(w.이름)+" "+w.슬롯+"개";}).join(" · ");',
-'  }',
-'  document.getElementById("status").innerHTML = t;',
-'}).S9_미배정슬롯조회();',
-'',
-'document.getElementById("go").onclick = function(){',
-'  var nm = document.getElementById("name").value.trim();',
-'  if(!nm){ alert("이름을 입력하세요."); return; }',
-'  var n = parseInt(document.getElementById("cnt").value, 10) || 0;',
-'  this.disabled = true; this.textContent = "불러오는 중…";',
-'  var btn = this;',
-'  document.getElementById("msg").innerHTML = "";',
-'  google.script.run',
-'    .withSuccessHandler(function(r){ btn.disabled=false; btn.textContent="불러오기"; render(r); })',
-'    .withFailureHandler(function(e){ btn.disabled=false; btn.textContent="불러오기";',
-'      document.getElementById("msg").innerHTML = "<div class=\\"err\\">"+esc(e.message)+"</div>"; })',
-'    .S9_지시서생성(nm, n);',
-'};',
-'document.getElementById("retry").onclick = function(){',
-'  var no=document.getElementById("instruction").value.trim(); if(!no){alert("피킹지시번호를 입력하세요.");return;}',
-'  var btn=this; btn.disabled=true;',
-'  google.script.run.withSuccessHandler(function(r){btn.disabled=false;alert(r.메시지);})',
-'    .withFailureHandler(function(e){btn.disabled=false;alert(e.message);}).S9_피킹PDF재시도(no);',
-'};',
-'',
-'function render(r){',
-'  if(r && r.오류){ document.getElementById("msg").innerHTML = "<div class=\\"err\\">"+esc(r.오류)+"</div>"; return; }',
-'  var h = "";',
-'  h += "<div class=\\"noprint\\" style=\\"margin:10px 0\\">";',
-'  h += "<button class=\\"print\\" onclick=\\"window.print()\\">🖨  인쇄하기</button>";',
-'  if(r.신규배정) h += " &nbsp;<span style=\\"font-size:12px;color:#2E5C8A\\">새로 "+r.신규배정+"개 슬롯이 배정되었습니다.</span>";',
-'  h += "</div>";',
-'',
-'  h += "<div class=\\"hdr\\"><h1>피킹 작업지시서</h1>";',
-'  h += "<div class=\\"meta\\">작업자 <b>"+esc(r.이름)+"</b>";',
-'  h += " &nbsp;·&nbsp; 출력 "+esc(r.출력시각);',
-'  h += " &nbsp;·&nbsp; 슬롯 "+r.슬롯.length+"개 &nbsp;·&nbsp; 품목 "+r.총품목+"종 &nbsp;·&nbsp; 총 "+r.총수량+"개</div></div>";',
-'  h += "<div class=\\"note\\">※ 출력 준비와 동시에 출고 처리됩니다. 문제가 있으면 주문 전체 취소로 재고를 복원하세요.</div>";',
-'',
-'  r.슬롯.forEach(function(s){',
-'    h += "<div class=\\"slot\\"><div class=\\"slothead\\">";',
-'    h += "<span>카트 슬롯 "+s.슬롯+"</span>";',
-'    h += "<span style=\\"font-weight:normal;font-size:13px\\">"+esc(s.주문번호)+" &nbsp; 품목 "+s.품목수+" / 수량 "+s.총수량+"</span>";',
-'    h += "</div><table><tr>";',
-'    h += "<th style=\\"width:38px\\">No</th><th style=\\"width:100px\\">보관위치</th>";',
-'    h += "<th style=\\"width:115px\\">상품코드</th><th>상품명 / 옵션</th>";',
-'    h += "<th style=\\"width:52px\\">수량</th></tr>";',
-'    s.품목.forEach(function(it){',
-'      h += "<tr><td style=\\"text-align:center\\">"+it.순번+"</td>";',
-'      h += "<td class=\\"loc\\">"+esc(it.위치)+"</td>";',
-'      h += "<td style=\\"font-family:Consolas,monospace;font-size:12px\\">"+esc(it.코드)+"</td>";',
-'      h += "<td>"+esc(it.상품명)+(it.옵션?" <span style=\\"color:#666\\">/ "+esc(it.옵션)+"</span>":"")+"</td>";',
-'      h += "<td class=\\"qty\\">"+it.수량+"</td></tr>";',
-'    });',
-'    h += "</table></div>";',
-'  });',
-'',
-'  document.getElementById("out").innerHTML = h;',
-'}',
-'</script></body></html>'
-  ].join('\n');
-}
-
-/**
- * S9_2. 담당자 배정 해제 — 잘못 배정했을 때 되돌린다.
- */
-function S9_2_배정해제(이름) {
-  return withLock_(function () {
-    if (!이름) {
-      var ui = null;
-      try { ui = SpreadsheetApp.getUi(); } catch (e) { }
-      if (!ui) throw new Error('이름을 인자로 넘겨주세요.');
-      var resp = ui.prompt('배정 해제',
-        '배정을 해제할 작업자 이름을 입력하세요.\n아직 시작하지 않은(대기) 슬롯만 해제됩니다.',
-        ui.ButtonSet.OK_CANCEL);
-      if (resp.getSelectedButton() !== ui.Button.OK) return;
-      이름 = resp.getResponseText().trim();
-      if (!이름) return;
-    }
-
-    var 헤더 = readTable_(ROLE.헤더);
-    var H = {
-      담당: col_(헤더, COL.피킹담당자, true),
-      상태: col_(헤더, COL.상태, true)
-    };
-
-    var 해제 = 0;
-    헤더.rows.forEach(function (r) {
-      if (toStr_(r[H.담당]) !== 이름) return;
-      if (toStr_(r[H.상태]) !== ENUM.헤더상태.대기) return;   // 진행 중인 건 건드리지 않는다
-      r[H.담당] = '';
-      해제++;
-    });
-
-    if (해제) writeColumn_(헤더.sheet, H.담당, 헤더.rows);
-
-    var msg = 이름 + ' 님의 대기 슬롯 ' + 해제 + '개를 해제했습니다.' +
-      (해제 === 0 ? '\n(진행 중이거나 완료된 슬롯은 해제되지 않습니다)' : '');
-    alert_(msg);
-    writeOpLog_('S9_2_배정해제', '성공', 이름 + ' / ' + 해제 + '개');
-    return 해제;
   });
 }

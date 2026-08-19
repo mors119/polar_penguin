@@ -256,7 +256,7 @@ function createReservationPickingBatch_(sku) {
     } catch (pdfError) {
       markPickingOutputState_(picking.지시번호, ENUM.헤더상태.출력오류);
       writeOpLog_('createReservationPickingBatch_', '실패', picking.지시번호 + ' / PDF / ' + pdfError.message);
-      throw new Error('PDF 생성에 실패했습니다. 주문은 출고완료로 바뀌지 않았습니다. 작업지시서 조회/재출력에서 ' +
+      throw new Error('PDF 생성에 실패했습니다. 주문은 출고완료로 바뀌지 않았습니다. 피킹지시서 조회/재출력에서 ' +
         picking.지시번호 + '을(를) 복구하세요.\n' + pdfError.message);
     }
     try { D0_대시보드전체갱신(true); } catch (dashboardError) {

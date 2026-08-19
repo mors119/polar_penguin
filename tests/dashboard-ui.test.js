@@ -37,7 +37,7 @@ test('integrated dashboard renderer writes the real dashboard tab and visible ac
     { 예약: 3, 취소: 4, 출고완료: 5, 전체: 12,
       예약전체: 3, 예약수량: 8, 예약출고가능: 1, 예약출고가능SKU: 1, 예약부족: 2,
       권고: { 제목: '주문 확정', 내용: ['확인'], 색: 'FFFFFF' } },
-    { 총가용: 100, 총예약: 10, 부족: [1], 품절: 2, 예약부족SKU: [1] },
+    { 총가용: 100, 총예약: 10, 부족: [1], 품절: 2, 위치미지정: 3, 예약부족SKU: [1] },
     { 전체라인: 8, 처리라인: 6, 미처리라인: 2, 진행률: 75, 작업대상주문: 1,
       오늘지시: 2, 오늘출고수량: 10, kpi: { 출력오류: 0 } },
     { latestTime: '2026-08-19 09:55', latestResult: 'PROCESSED · orders.csv', warning: '없음', recentErrors: [] });
@@ -45,7 +45,21 @@ test('integrated dashboard renderer writes the real dashboard tab and visible ac
   assert.equal(cells.get('1:1'), '📊  Polar Penguin 통합 대시보드');
   assert.equal(cells.get('31:1'), '없음');
   assert.match(cells.get('35:1'), /셀은 버튼이 아닙니다/);
+  assert.match(cells.get('28:1'), /위치 미지정 상품 3건/);
   assert.equal(cells.get('36:3'), 'Input 지금 처리');
+});
+
+test('stock dashboard count reflects products whose warehouse location is blank', () => {
+  const headers = ['상품품목코드', '상품명', '가용재고', '예약재고', '불량재고', '기본보관위치'];
+  const headerIndex = Object.fromEntries(headers.map((header, index) => [context.normKey_(header), index]));
+  context.readTable_ = () => ({ headers, headerIndex, role: '상품마스터', rows: [
+    ['SKU1', '상품1', 10, 0, 0, 'A-01'],
+    ['SKU2', '상품2', 5, 1, 0, ''],
+    ['SKU3', '상품3', 2, 0, 0, '   ']
+  ] });
+  context.param_ = () => 3;
+  context.collectPreorderData_ = () => ({ 예약부족SKU: [] });
+  assert.equal(context.collectStockStatus_().위치미지정, 2);
 });
 
 test('onOpen registers the current menu and every handler exists in source', () => {
@@ -65,15 +79,15 @@ test('onOpen registers the current menu and every handler exists in source', () 
   assert.ok(menuNames.includes('📦 Polar Penguin'));
   for (const expected of ['processInput', '선택_주문취소', '예약상품_피킹관리',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '진단_시트구조',
-    'setupSystem', '정리_로그', '설정_보기']) {
+    '위치_미지정상품관리', 'setupSystem', '정리_로그']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
   }
   for (const internal of ['S1_1_카페24재고동기화', 'S2_1_주문CSV취입', 'S3_1_주문확정', 'S4_1_피킹지시생성']) {
     assert.equal(handlers.includes(internal), false, `${internal} must stay out of the operator menu`);
   }
-  for (const expected of ['Input 지금 처리', '작업지시서 조회 / 재출력',
+  for (const expected of ['Input 지금 처리', '피킹지시서 조회 / 재출력', '위치 미지정 상품',
     '선택 주문 취소', '예약상품 피킹 관리', '대시보드 갱신', '시스템 상태 확인',
-    '시스템 설치 / 복구', '설정 보기', '로그 정리']) {
+    '시스템 설치 / 복구', '로그 정리']) {
     assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
   }
   for (const internal of ['카페24 재고 동기화', '주문 CSV 취입', '주문 확정', '피킹지시 생성']) {

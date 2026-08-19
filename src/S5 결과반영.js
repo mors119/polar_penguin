@@ -28,7 +28,7 @@ function finalizePickingAfterOutput_(instructionNo, options) {
       상태: col_(라인, COL.라인상태, true), 처리일시: col_(라인, COL.처리일시, true)
     };
     var H = {
-      주문번호: col_(헤더, COL.주문번호, true), 담당자: col_(헤더, COL.피킹담당자, true),
+      주문번호: col_(헤더, COL.주문번호, true), 담당자: col_(헤더, COL.피킹담당자, false),
       상태: col_(헤더, COL.상태, true), 지시: col_(헤더, COL.피킹지시번호, true),
       출력일시: col_(헤더, COL.출력일시, false)
     };
