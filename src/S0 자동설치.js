@@ -2,7 +2,7 @@
  * ============================================================
  *  ROOT_FOLDER 기반 자동 설치
  * ============================================================
- *  ROOT 폴더 하나를 기준으로 Drive 폴더, Console/업무 Spreadsheet,
+ *  ROOT 폴더 하나를 기준으로 Drive 폴더, 단일 운영 Spreadsheet,
  *  표준 시트·헤더·설정, validation, trigger, 대시보드를 구성한다.
  *  모든 ensure 단계는 재실행을 전제로 하며 기존 데이터를 초기화하지 않는다.
  * ============================================================
@@ -11,6 +11,7 @@
 var ROOT_FOLDER_PROPERTY = 'ROOT_FOLDER_ID';
 var ROOT_FOLDER_URL_PROPERTY = 'ROOT_FOLDER_URL';
 var INSTALL_ROOT_MARKER_PROPERTY = 'POLAR_PENGUIN_ROOT_FOLDER_ID';
+var OPERATION_SPREADSHEET_PROPERTY = 'OPERATION_SPREADSHEET_ID';
 
 /**
  * 설치 기준이 될 Google Drive 폴더를 검증하고 Script Property에 저장한다.
@@ -49,23 +50,20 @@ function setupSystem() {
         return ensureProjectFolders_(root, report);
       });
 
-      var consoleResource = setupStep_('Console Spreadsheet 구성', function () {
-        return ensureConsoleSpreadsheet_(folders.console, root.getId(), report);
+      var operationResource = setupStep_('운영 Spreadsheet 구성', function () {
+        return ensureOperationSpreadsheet_(root, root.getId(), report);
       });
 
-      persistConsole_(consoleResource.ss, root.getId(), folders);
-      ensureConsoleSheets_(consoleResource.ss);
-      var existingConfig = readSetupConfig_(consoleResource.ss.getSheetByName(CONSOLE.설정));
-
-      var resources = setupStep_('업무 Spreadsheet 구성', function () {
-        return ensureProjectSpreadsheets_(folders, existingConfig, report);
+      persistOperation_(operationResource.ss, root.getId(), folders);
+      var resources = setupStep_('운영 탭 구성', function () {
+        return ensureOperationalSheets_(operationResource.ss);
       });
 
       setupStep_('설정 등록', function () {
-        ensureSetupConfig_(consoleResource.ss, folders, resources, report);
+        ensureSetupConfig_(operationResource.ss, folders, resources, report);
       });
 
-      _cache.consoleSS = consoleResource.ss;
+      _cache.consoleSS = operationResource.ss;
       _cache.config = null;
       _cache.ss = {};
 
@@ -77,11 +75,14 @@ function setupSystem() {
       if (String(triggerResult).indexOf('⚠') >= 0) report.warnings.push(triggerResult);
       else report.configuration.push('Triggers registered');
 
+      setupStep_('안내 구성', function () { renderGuideSheet_(operationResource.ss, folders); });
+      report.configuration.push('Guide rendered');
+
       var dashboardResult = setupStep_('Dashboard 갱신', function () {
         return D0_대시보드전체갱신(true);
       });
       if (String(dashboardResult).indexOf('❌') >= 0) report.warnings.push(dashboardResult);
-      else report.configuration.push('Dashboards refreshed');
+      else report.configuration.push('Dashboard refreshed');
 
       PropertiesService.getScriptProperties().setProperty(INSTALL_ROOT_MARKER_PROPERTY, root.getId());
       var message = buildSetupReport_(report);
@@ -121,10 +122,6 @@ function resolveRootFolder_() {
 
 function ensureProjectFolders_(root, report) {
   var folders = {};
-  folders.console = ensureChildFolder_(root, '01 Console', 'Console', report);
-  folders.master = ensureChildFolder_(root, '02 Master', 'Master', report);
-  folders.orders = ensureChildFolder_(root, '03 Orders', 'Orders', report);
-  folders.picking = ensureChildFolder_(root, '04 Picking', 'Picking', report);
   folders.input = ensureChildFolder_(root, 'Input', 'Input', report);
   folders.processed = ensureChildFolder_(root, 'Processed', 'Processed', report);
   folders.error = ensureChildFolder_(root, 'Error', 'Error', report);
@@ -147,28 +144,29 @@ function ensureChildFolder_(parent, name, label, report) {
 function installResourceDefinitions_() {
   return [
     {
-      role: ROLE.마스터, property: 'SPREADSHEET_ID_MASTER', folder: 'master',
-      fileName: '상품마스터', sheetName: '상품마스터',
+      role: ROLE.마스터, sheetName: '상품마스터',
       headers: [COL.상품품목코드, COL.상품명, COL.옵션명, COL.이미지, COL.기본보관위치,
         COL.가용재고, COL.예약재고, COL.불량재고, COL.상품상태, COL.예약상품,
         COL.재고관리, COL.판매가, COL.최종동기화]
     },
     {
-      role: ROLE.주문, property: 'SPREADSHEET_ID_ORDERS', folder: 'orders',
-      fileName: '주문완료', sheetName: '주문(완료)',
-      headers: [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.수량,
+      role: ROLE.주문, sheetName: '주문(완료)',
+      headers: [COL.주문번호, COL.품목별주문번호, '주문일시', '주문경로', '결제수단',
+        '상품번호', COL.상품품목코드, COL.상품명, COL.옵션명, COL.수량,
+        '판매가', '상품구매금액', '할인금액', '실결제금액', '주문자명', '주문자 이메일',
+        '주문자 휴대전화', '수령인', '수령인 일반전화', '수령인 휴대전화',
+        '수령인 우편번호', '수령인 주소', '배송메시지', '배송업체', '송장번호',
+        '배송비', '배송유형',
         COL.출고완료, COL.피킹지시번호, COL.주문상태, COL.취소사유,
         COL.취소일시, COL.확정일시, COL.대기사유]
     },
     {
-      role: ROLE.헤더, property: 'SPREADSHEET_ID_PICKING_HEADER', folder: 'picking',
-      fileName: '피킹헤더', sheetName: '피킹(헤더)',
+      role: ROLE.헤더, sheetName: '피킹(헤더)',
       headers: [COL.피킹지시번호, COL.주문번호, COL.카트슬롯, COL.품목수,
         COL.총수량, COL.피킹담당자, COL.상태, COL.출력일시]
     },
     {
-      role: ROLE.라인, property: 'SPREADSHEET_ID_PICKING_LINE', folder: 'picking',
-      fileName: '피킹라인', sheetName: '피킹(라인)',
+      role: ROLE.라인, sheetName: '피킹(라인)',
       headers: [COL.순번, COL.보관위치, COL.상품코드, COL.이미지, COL.상품명,
         COL.옵션, COL.필요수량, COL.확인, COL.실제수량, COL.예외사유,
         COL.품목별주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태, COL.처리일시]
@@ -191,24 +189,21 @@ function installAliases_() {
   ];
 }
 
-function ensureConsoleSpreadsheet_(folder, rootId, report) {
+function ensureOperationSpreadsheet_(root, rootId, report) {
   var props = PropertiesService.getScriptProperties();
   var candidate = props.getProperty(INSTALL_ROOT_MARKER_PROPERTY) === rootId
-    ? props.getProperty('CONSOLE_SS_ID') : '';
-  var resource = ensureSpreadsheetResource_(folder, 'Polar Penguin Console', '설정', candidate);
-  report.spreadsheets.push({ role: 'Console', id: resource.ss.getId(), name: resource.ss.getName(), created: resource.created });
+    ? props.getProperty(OPERATION_SPREADSHEET_PROPERTY) : '';
+  var resource = ensureSpreadsheetResource_(root, 'Polar Penguin', '📖 안내', candidate);
+  report.spreadsheets.push({ role: 'Operational', id: resource.ss.getId(), name: resource.ss.getName(), created: resource.created });
   return resource;
 }
 
-function persistConsole_(ss, rootId, folders) {
+function persistOperation_(ss, rootId, folders) {
   var values = {
     ROOT_FOLDER_ID: rootId,
+    OPERATION_SPREADSHEET_ID: ss.getId(),
     CONSOLE_SS_ID: ss.getId(),
     POLAR_PENGUIN_ROOT_FOLDER_ID: rootId,
-    FOLDER_ID_CONSOLE: folders.console.getId(),
-    FOLDER_ID_MASTER: folders.master.getId(),
-    FOLDER_ID_ORDERS: folders.orders.getId(),
-    FOLDER_ID_PICKING: folders.picking.getId(),
     FOLDER_ID_INPUT: folders.input.getId(),
     FOLDER_ID_PROCESSED: folders.processed.getId(),
     FOLDER_ID_ERROR: folders.error.getId(),
@@ -221,7 +216,15 @@ function persistConsole_(ss, rootId, folders) {
   _cache.ss = {};
 }
 
-function ensureConsoleSheets_(ss) {
+function ensureOperationalSheets_(ss) {
+  var resources = {};
+  ensureInstallSheet_(ss, '📖 안내', []);
+  ensureInstallSheet_(ss, '📊 대시보드', []);
+  installResourceDefinitions_().forEach(function (def) {
+    resources[def.role] = { ss: ss, sheet: ensureInstallSheet_(ss, def.sheetName, def.headers) };
+  });
+  ensureInstallSheet_(ss, '예약대기', [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.대기사유]);
+  ensureInstallSheet_(ss, '주문반려', [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.취소사유, COL.취소일시]);
   ensureInstallSheet_(ss, CONSOLE.설정, ['구분', '키', '값', '비고']);
   ensureInstallSheet_(ss, CONSOLE.재고이동로그, [
     '시각', '구분', COL.피킹지시번호, COL.주문번호, COL.품목별주문번호,
@@ -229,21 +232,6 @@ function ensureConsoleSheets_(ss) {
   ]);
   ensureInstallSheet_(ss, CONSOLE.작업로그, ['시각', '함수', '결과', '메시지', '실행계정']);
   ensureInstallSheet_(ss, CONSOLE.입력처리로그, INPUT_LOG_HEADERS);
-}
-
-function ensureProjectSpreadsheets_(folders, config, report) {
-  var props = PropertiesService.getScriptProperties();
-  var resources = {};
-
-  installResourceDefinitions_().forEach(function (def) {
-    var configuredId = config.파일ID[def.role] || '';
-    var candidate = validSpreadsheetId_(configuredId) ? configuredId : '';
-    var resource = ensureSpreadsheetResource_(folders[def.folder], def.fileName, def.sheetName, candidate);
-    resource.sheet = ensureInstallSheet_(resource.ss, def.sheetName, def.headers);
-    resources[def.role] = resource;
-    props.setProperty(def.property, resource.ss.getId());
-    report.spreadsheets.push({ role: def.role, id: resource.ss.getId(), name: resource.ss.getName(), created: resource.created });
-  });
   return resources;
 }
 
@@ -283,7 +271,8 @@ function ensureInstallSheet_(ss, name, headers) {
   var sheet = ss.getSheetByName(name);
   if (!sheet) {
     var sheets = ss.getSheets();
-    if (sheets.length === 1 && sheets[0].getLastRow() === 0 && sheets[0].getLastColumn() === 0) {
+    if (sheets.length === 1 && sheets[0].getName() === 'Sheet1' &&
+        sheets[0].getLastRow() === 0 && sheets[0].getLastColumn() === 0) {
       sheet = sheets[0].setName(name);
     } else {
       sheet = ss.insertSheet(name);
@@ -308,6 +297,48 @@ function ensureInstallSheet_(ss, name, headers) {
       .setFontWeight('bold').setBackground('E8EDF3');
   }
   return sheet;
+}
+
+/** 안내 탭은 시스템이 관리하는 설명 영역이며 setup 재실행 때 현재 구조로 다시 그린다. */
+function renderGuideSheet_(ss, folders) {
+  var sh = ensureInstallSheet_(ss, '📖 안내', []);
+  sh.clearContents();
+  sh.clearFormats();
+  if (sh.getMaxColumns() < 8) sh.insertColumnsAfter(sh.getMaxColumns(), 8 - sh.getMaxColumns());
+
+  sh.getRange(1, 1, 1, 8).merge().setValue('📖  Polar Penguin 운영 안내')
+    .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
+  sh.getRange(3, 1, 1, 8).merge().setValue(
+    'Input 파일 업로드  →  자동 주문/재고 판별  →  검증  →  재고 또는 주문 처리  →  주문 확정  →  피킹지시 생성  →  PDF 자동 생성  →  현장 피킹  →  O/X 입력  →  결과 반영'
+  ).setWrap(true).setBackground(DASHCOLOR.카드).setFontWeight('bold');
+
+  var rows = [
+    ['폴더', '용도'],
+    ['Input', '주문·재고 파일을 함께 올리는 유일한 입력 폴더'],
+    ['Processed', '정상 처리된 원본이 날짜별로 이동'],
+    ['Error', '검증/처리 실패 원본이 날짜별로 이동'],
+    ['Output', 'Output/YYYY-MM-DD/<피킹지시번호>.pdf'],
+    ['Backup', '보관 및 향후 백업용'],
+    ['', ''],
+    ['핵심 용어', '설명'],
+    ['주문상태', '접수 → 확정 또는 예약대기/취소 → 출고완료'],
+    ['가용재고', '새 주문에 배정할 수 있는 수량'],
+    ['예약재고', '확정 주문에 확보되어 출고를 기다리는 수량'],
+    ['예약상품', 'Y인 동안 주문 전체를 예약대기로 유지'],
+    ['O / X', 'O=정상 피킹, X=예외. X이면 예외사유를 선택하고 주문 전체 취소 규칙 적용'],
+    ['대시보드', '주문·재고·피킹·예약·운영 현황과 권고를 한 화면에서 확인'],
+    ['', ''],
+    ['운영 방법', '상단 「📦 Polar Penguin」 메뉴에서 Input 처리, 주문 확정, 피킹지시 생성, 결과 반영, 작업지시서 출력, 대시보드 갱신을 실행하세요.']
+  ];
+  sh.getRange(5, 1, rows.length, 2).setValues(rows).setWrap(true);
+  sh.getRange(5, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
+  sh.getRange(12, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
+  sh.getRange(20, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
+  sh.setColumnWidth(1, 150);
+  sh.setColumnWidth(2, 620);
+  sh.setFrozenRows(1);
+  sh.setHiddenGridlines(true);
+  return sh;
 }
 
 function missingInstallHeaders_(current, required, acceptAliases) {
@@ -356,8 +387,8 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   var sheet = consoleSs.getSheetByName(CONSOLE.설정);
   var managed = [];
   installResourceDefinitions_().forEach(function (def) {
-    managed.push(['파일ID', def.role, resources[def.role].ss.getId(), def.fileName,
-      function (value) { return validSpreadsheetId_(value); }]);
+    managed.push(['파일ID', def.role, resources[def.role].ss.getId(), '단일 운영 Spreadsheet',
+      function (value) { return extractDriveId_(value) === resources[def.role].ss.getId(); }]);
     managed.push(['시트명', def.role, resources[def.role].sheet.getName(), '표준 업무 시트',
       function (value) { return !!resources[def.role].ss.getSheetByName(String(value || '')); }]);
   });
@@ -393,7 +424,7 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   sheet.autoResizeColumns(1, 4);
   _cache.config = null;
   _cache.ss = {};
-  report.configuration.push('File IDs registered');
+  report.configuration.push('Single operational Spreadsheet registered');
   report.configuration.push('Folder IDs registered');
 }
 

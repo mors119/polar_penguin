@@ -64,6 +64,10 @@ function S2_1_주문CSV취입(입력파일, options) {
       alert_('폴더에 처리할 주문 CSV가 없습니다.\n(카페24 재고 CSV는 S1에서 처리합니다)');
       return { 파일수: 0 };
     }
+
+    // 카페24 주문 export의 모든 열을 먼저 보충한다. 내부 운영 열만 남기고
+    // 원본 필드를 버리는 회귀를 막으며, 기존 열과 데이터는 이동하거나 지우지 않는다.
+    ensureOrderImportColumns_(csvFiles);
  
     // ---------- 주문 시트 준비 ----------
     var 주문 = readTable_(ROLE.주문);
@@ -185,5 +189,28 @@ function parseCsvFile_(file, 주문, c품목별, 기존키) {
 function getOrCreateSubFolder_(parent, name) {
   var it = parent.getFoldersByName(name);
   return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+
+function ensureOrderImportColumns_(files) {
+  var headers = [];
+  (files || []).forEach(function (file) {
+    var first;
+    if (file.getMimeType() === MimeType.GOOGLE_SHEETS) {
+      var sh = SpreadsheetApp.openById(file.getId()).getSheets()[0];
+      if (sh.getLastColumn() > 0) first = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+    } else {
+      var parsed = Utilities.parseCsv(readCsvText_(file));
+      first = parsed && parsed[0];
+    }
+    (first || []).forEach(function (value) {
+      var name = String(value || '').replace(/^\uFEFF/, '').trim();
+      if (name && headers.indexOf(name) < 0) headers.push(name);
+    });
+  });
+  if (!headers.length) return [];
+  var order = readTable_(ROLE.주문);
+  return ensureColumns_(order.sheet, order.headers, headers.filter(function (name) {
+    return col_(order, name, false) < 0;
+  }));
 }
  

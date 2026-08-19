@@ -2,25 +2,18 @@
  * ============================================================
  *  D. 운영 대시보드
  * ============================================================
- *  주문·재고·피킹 역할 Spreadsheet에 각 사용자의 업무에 맞는 현황 탭을 만든다.
- *  통합 Input 처리와 수동 메뉴는 D0을 호출해 세 대시보드를 한 번에 갱신한다.
- *
- *   D1. 주문현황  → 주문(완료) 파일   · 관리자용
- *       주문 파이프라인 + 피킹 진행 속도 + 갱신 권고
- *   D2. 재고현황  → 상품마스터 파일   · 관리자용
- *       가용/예약/부족/예약대기 재고
- *   D3. 피킹현황  → 피킹(헤더) 파일   · 현장용
- *       슬롯별 진행, 담당자별 실적, 취소 알림
+ *  단일 운영 Spreadsheet의 「📊 대시보드」에 주문·재고·피킹·예약·운영
+ *  현황을 함께 렌더링한다. 기존 집계 함수는 그대로 재사용한다.
  * ============================================================
  */
 
 /* ============================================================
- *  D1. 주문 현황  (주문(완료) 파일)
+ *  D1. 주문 현황 집계/호환 레이아웃
  * ============================================================ */
 
-function D1_주문현황갱신() {
+function renderLegacyOrderDashboard_() {
   var ss = openSS_(ROLE.주문);
-  var sh = ensureDashSheet_(ss, '📊 주문현황');
+  var sh = ensureDashSheet_(ss, '📊 대시보드');
   var d = collectOrderStatus_();
 
   sh.clear(); sh.clearFormats();
@@ -357,12 +350,12 @@ function 표시시간_(분) {
 }
 
 /* ============================================================
- *  D2. 재고 현황  (상품마스터 파일)
+ *  D2. 재고 현황 집계/호환 레이아웃
  * ============================================================ */
 
-function D2_재고현황갱신() {
+function renderLegacyStockDashboard_() {
   var ss = openSS_(ROLE.마스터);
-  var sh = ensureDashSheet_(ss, '📊 재고현황');
+  var sh = ensureDashSheet_(ss, '📊 대시보드');
   var d = collectStockStatus_();
 
   sh.clear(); sh.clearFormats();
@@ -531,12 +524,12 @@ function collectStockStatus_() {
 }
 
 /* ============================================================
- *  D3. 피킹 현황  (피킹(헤더) 파일)
+ *  D3. 피킹 현황 집계/호환 레이아웃
  * ============================================================ */
 
-function D3_피킹현황갱신() {
+function renderLegacyPickingDashboard_() {
   var ss = openSS_(ROLE.헤더);
-  var sh = ensureDashSheet_(ss, '📊 피킹현황');
+  var sh = ensureDashSheet_(ss, '📊 대시보드');
   var d = collectPickingStatus_();
 
   sh.clear(); sh.clearFormats();
@@ -750,21 +743,164 @@ function collectPickingStatus_() {
  * ============================================================ */
 
 /**
- * 주문·재고·피킹 대시보드를 각각 갱신하고 개별 실패를 결과에 남긴다.
+ * 주문·재고·피킹 집계를 한 탭에 갱신하고 파생 운영 탭도 동기화한다.
  *
  * @param {boolean=} silent true면 완료 알림을 표시하지 않는다.
- * @return {string} 대시보드별 성공 또는 실패 요약
- * @sideEffect 각 역할 Spreadsheet의 대시보드 탭을 다시 렌더링한다.
+ * @return {string} 갱신 결과
+ * @sideEffect 단일 운영 Spreadsheet의 대시보드와 파생 조회 탭을 렌더링한다.
  */
 function D0_대시보드전체갱신(silent) {
-  var 결과 = [];
-  try { D1_주문현황갱신(); 결과.push('✅ 주문현황'); }
-  catch (e) { 결과.push('❌ 주문현황: ' + e.message); }
-  try { D2_재고현황갱신(); 결과.push('✅ 재고현황'); }
-  catch (e) { 결과.push('❌ 재고현황: ' + e.message); }
-  try { D3_피킹현황갱신(); 결과.push('✅ 피킹현황'); }
-  catch (e) { 결과.push('❌ 피킹현황: ' + e.message); }
+  try {
+    var order = collectOrderStatus_();
+    var stock = collectStockStatus_();
+    var picking = collectPickingStatus_();
+    var operation = collectOperationStatus_();
+    refreshOperationalViews_();
+    renderIntegratedDashboard_(consoleSS_(), order, stock, picking, operation);
+    var result = '✅ 통합 대시보드';
+    if (!silent) alert_('대시보드 갱신 완료');
+    return result;
+  } catch (e) {
+    var failed = '❌ 통합 대시보드: ' + e.message;
+    if (!silent) alert_(failed);
+    return failed;
+  }
+}
 
-  if (!silent) alert_('대시보드 갱신\n\n' + 결과.join('\n'));
-  return 결과.join(' / ');
+/** 이전 메뉴/자동화에서 호출하던 이름은 통합 대시보드로 연결한다. */
+function D1_주문현황갱신() { return D0_대시보드전체갱신(true); }
+function D2_재고현황갱신() { return D0_대시보드전체갱신(true); }
+function D3_피킹현황갱신() { return D0_대시보드전체갱신(true); }
+
+function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
+  var sh = ensureDashSheet_(ss, '📊 대시보드');
+  sh.clear();
+  sh.clearFormats();
+  if (sh.getMaxColumns() < 10) sh.insertColumnsAfter(sh.getMaxColumns(), 10 - sh.getMaxColumns());
+  sh.getRange(1, 1, 1, 10).merge().setValue('📊  Polar Penguin 통합 대시보드')
+    .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF')
+    .setBackground(DASHCOLOR.제목).setVerticalAlignment('middle');
+  sh.setRowHeight(1, 40);
+  sh.getRange(2, 1, 1, 10).merge().setValue(
+    '최근 갱신 ' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss') +
+    '  ·  실행은 상단 「📦 Polar Penguin」 메뉴를 사용하세요.'
+  ).setFontColor('595959');
+
+  dashboardSection_(sh, 4, '주문', [
+    ['접수', order.접수], ['확정', order.확정], ['예약대기', order.예약대기],
+    ['취소', order.취소], ['출고완료', order.출고완료], ['전체 주문', order.전체]
+  ]);
+  dashboardSection_(sh, 9, '재고', [
+    ['가용 재고', stock.총가용], ['예약 재고', stock.총예약],
+    ['저재고 상품', stock.부족.length], ['품절/경고', stock.품절]
+  ]);
+  dashboardSection_(sh, 14, '피킹', [
+    ['전체 라인', picking.전체라인], ['완료 라인', picking.처리라인],
+    ['남은 라인', picking.전체라인 - picking.처리라인], ['진행률', picking.진행률 + '%'],
+    ['대기 슬롯', picking.kpi.대기], ['진행 슬롯', picking.kpi.진행]
+  ]);
+  sh.getRange(20, 1, 1, 10).merge().setValue(
+    '속도 ' + (order.피킹.속도 ? order.피킹.속도 + ' 라인/시간' : '데이터 부족') +
+    '  ·  예상 ' + (order.피킹.예상분 === null ? '—' : 표시시간_(order.피킹.예상분)) +
+    '  ·  ' + bar_(picking.진행률, 24)
+  ).setFontFamily('Consolas').setBackground(DASHCOLOR.카드);
+
+  var waitingQty = 0;
+  order.예약목록.forEach(function (item) { waitingQty += item.수량; });
+  var releasable = order.예약목록.filter(function (item) { return item.부족 <= 0; }).length;
+  dashboardSection_(sh, 22, '예약', [
+    ['예약대기 주문', order.예약대기], ['대기 수량', waitingQty],
+    ['재고 부족 품목', order.예약목록.filter(function (item) { return item.부족 > 0; }).length],
+    ['출고 가능 품목', releasable]
+  ]);
+  sh.getRange(27, 1, 1, 10).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / '))
+    .setWrap(true).setFontWeight('bold').setBackground(order.권고.색);
+
+  sh.getRange(29, 1, 1, 10).merge().setValue('운영').setFontWeight('bold')
+    .setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
+  var opRows = [
+    ['최근 Input 상태', operation.input],
+    ['최근 실패', operation.failure],
+    ['다음 작업', order.권고.제목]
+  ];
+  sh.getRange(30, 1, opRows.length, 2).setValues(opRows);
+  sh.getRange(30, 1, opRows.length, 1).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
+
+  sh.getRange(35, 1, 1, 10).merge().setValue('작업 바로가기 (셀은 버튼이 아닙니다 — 상단 메뉴에서 실행)')
+    .setFontWeight('bold').setBackground(DASHCOLOR.경고);
+  sh.getRange(36, 1, 1, 8).setValues([[
+    '📥 Input 지금 처리', '', '🔄 대시보드 갱신', '', '🖨 작업지시서 출력', '', '⏳ 예약대기 조회', ''
+  ]]).setFontWeight('bold').setHorizontalAlignment('center').setBackground(DASHCOLOR.카드);
+  [1, 3, 5, 7].forEach(function (col) { sh.getRange(36, col, 1, 2).merge(); });
+
+  for (var c = 1; c <= 10; c++) sh.setColumnWidth(c, c % 2 ? 120 : 90);
+  sh.setFrozenRows(2);
+  sh.setHiddenGridlines(true);
+  return sh;
+}
+
+function dashboardSection_(sh, row, title, items) {
+  sh.getRange(row, 1, 1, 10).merge().setValue(title).setFontWeight('bold')
+    .setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
+  items.forEach(function (item, i) {
+    var col = 1 + (i % 5) * 2;
+    var targetRow = row + 1 + Math.floor(i / 5) * 2;
+    sh.getRange(targetRow, col, 1, 2).merge().setValue(item[0]).setFontWeight('bold')
+      .setHorizontalAlignment('center').setBackground(DASHCOLOR.헤더);
+    sh.getRange(targetRow + 1, col, 1, 2).merge().setValue(item[1]).setFontSize(16)
+      .setFontWeight('bold').setHorizontalAlignment('center').setBackground(DASHCOLOR.카드);
+  });
+}
+
+function collectOperationStatus_() {
+  var sh = consoleSS_().getSheetByName(CONSOLE.입력처리로그);
+  var out = { input: '처리 이력 없음', failure: '없음' };
+  if (!sh || sh.getLastRow() < 2) return out;
+  var rows = sh.getRange(2, 1, Math.min(sh.getLastRow() - 1, 50), INPUT_LOG_HEADERS.length).getValues();
+  if (rows.length) out.input = toStr_(rows[0][5]) + ' · ' + toStr_(rows[0][2]) + ' · ' + toStr_(rows[0][0]);
+  for (var i = 0; i < rows.length; i++) {
+    if (toStr_(rows[i][5]) === 'ERROR') {
+      out.failure = toStr_(rows[i][2]) + ' · ' + toStr_(rows[i][6]) + ' · ' + toStr_(rows[i][7]);
+      break;
+    }
+  }
+  return out;
+}
+
+/** 예약대기/주문반려는 주문(완료)의 현재 상태를 복사한 읽기 전용 조회 탭이다. */
+function refreshOperationalViews_() {
+  var order = readTable_(ROLE.주문);
+  var indexes = {
+    주문번호: col_(order, COL.주문번호, true),
+    품목별: col_(order, COL.품목별주문번호, true),
+    상품코드: col_(order, COL.상품품목코드, true),
+    상품명: col_(order, COL.상품명, false),
+    수량: col_(order, COL.수량, true),
+    상태: col_(order, COL.주문상태, true),
+    대기사유: col_(order, COL.대기사유, false),
+    취소사유: col_(order, COL.취소사유, false),
+    취소일시: col_(order, COL.취소일시, false)
+  };
+  writeOperationalView_('예약대기',
+    [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.대기사유],
+    order.rows.filter(function (r) { return toStr_(r[indexes.상태]) === ENUM.주문상태.예약대기; })
+      .map(function (r) { return [r[indexes.주문번호], r[indexes.품목별], r[indexes.상품코드],
+        indexes.상품명 >= 0 ? r[indexes.상품명] : '', r[indexes.수량], indexes.대기사유 >= 0 ? r[indexes.대기사유] : '']; }));
+  writeOperationalView_('주문반려',
+    [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.취소사유, COL.취소일시],
+    order.rows.filter(function (r) { return toStr_(r[indexes.상태]) === ENUM.주문상태.취소 &&
+      indexes.취소사유 >= 0 && !isBlank_(r[indexes.취소사유]); })
+      .map(function (r) { return [r[indexes.주문번호], r[indexes.품목별], r[indexes.상품코드],
+        indexes.상품명 >= 0 ? r[indexes.상품명] : '', r[indexes.수량], r[indexes.취소사유],
+        indexes.취소일시 >= 0 ? r[indexes.취소일시] : '']; }));
+}
+
+function writeOperationalView_(name, headers, rows) {
+  var sh = consoleSS_().getSheetByName(name);
+  if (!sh) sh = consoleSS_().insertSheet(name);
+  sh.clearContents();
+  sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
+  if (rows.length) sh.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  sh.setFrozenRows(1);
+  sh.getRange(1, 1).setNote('주문(완료)의 현재 상태에서 자동 생성됩니다. 이 탭을 직접 수정하지 마세요.');
 }
