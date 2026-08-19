@@ -109,6 +109,11 @@ function 설치_2_시트정비(silent) {
     SpreadsheetApp.newDataValidation()
       .requireValueInList(ENUM.예외사유, true)
       .setAllowInvalid(false).build());
+  라인.sheet.getRange(1, c확인 + 1).setNote(
+    'O = 정상, X = 예외입니다. X 입력 시 예외사유를 선택한 뒤 상단 📦 Polar Penguin → 주문/피킹 → 결과 반영을 실행하세요.');
+  라인.sheet.getRange(1, c예외 + 1).setNote('X인 행은 재고없음 또는 불량재고를 선택하세요.');
+  라인.sheet.setColumnWidth(c확인 + 1, 80);
+  라인.sheet.setColumnWidth(c예외 + 1, 120);
   결과.push('피킹(라인): O/X · 예외사유 드롭다운 적용');
 
   /* ---------- 상품마스터 ---------- */
@@ -186,7 +191,7 @@ function 설치_3_트리거등록(silent) {
  * ============================================================ */
 
 function 점검_연결확인() {
-  var out = ['콘솔 파일: ' + consoleSS_().getName()];
+  var out = ['운영 Spreadsheet: ' + consoleSS_().getName()];
   [ROLE.마스터, ROLE.주문, ROLE.헤더, ROLE.라인].forEach(function (role) {
     try {
       var sh = getSheet_(role);
@@ -223,16 +228,12 @@ function 진단_시트구조() {
                   COL.실제수량, COL.품목별주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태]);
 
   var ss = consoleSS_();
-  [CONSOLE.설정, CONSOLE.재고이동로그, CONSOLE.작업로그, CONSOLE.입력처리로그].forEach(function (n) {
-    out.push((ss.getSheetByName(n) ? '✅ ' : '❌ ') + '콘솔 탭: ' + n);
+  ['📖 안내', '📊 대시보드', '예약대기', '주문반려', CONSOLE.설정,
+   CONSOLE.재고이동로그, CONSOLE.작업로그, CONSOLE.입력처리로그].forEach(function (n) {
+    out.push((ss.getSheetByName(n) ? '✅ ' : '❌ ') + '운영 탭: ' + n);
   });
 
-  [[ROLE.주문, '📊 주문현황'], [ROLE.마스터, '📊 재고현황'], [ROLE.헤더, '📊 피킹현황']]
-    .forEach(function (p) {
-      try {
-        out.push((openSS_(p[0]).getSheetByName(p[1]) ? '✅ ' : '❌ ') + '대시보드: ' + p[1]);
-      } catch (e) { out.push('❌ 대시보드: ' + p[1]); }
-    });
+  out.push((ss.getSheetByName('📊 대시보드') ? '✅ ' : '❌ ') + '통합 대시보드');
 
   var trg = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   out.push((trg.length ? '✅ ' : '❌ ') + '트리거: ' + (trg.join(', ') || '없음'));
@@ -271,33 +272,34 @@ function ensureColumns_(sheet, headers, names) {
 function onOpen(e) {
   try {
     var ui = SpreadsheetApp.getUi();
-    ui.createMenu('📦 피킹 운영')
-      .addItem('⚙️ 시스템 설치 · 복구', 'setupSystem')
-      .addItem('📥 Input 지금 처리', 'processInput')
-      .addSeparator()
-      .addItem('S3. 주문 확정 (재고 검증)', 'S3_1_주문확정')
-      .addItem('S4. 피킹지시 생성', 'S4_1_피킹지시생성')
-      .addSeparator()
-      .addItem('🖨  작업지시서 출력', 'S9_1_작업지시서출력')
-      .addItem('S5. 재고 반영 · 취소 처리', 'S5_2_수동반영')
-      .addSeparator()
-      .addItem('📊 대시보드 전체 갱신', 'D0_대시보드전체갱신')
-      .addSubMenu(ui.createMenu('조회')
-        .addItem('확정 시뮬레이션', 'S3_9_확정대기조회')
-        .addItem('예약대기 현황', 'S8_2_예약대기조회')
-        .addItem('보관위치 미지정', 'S1_2_보관위치미지정조회'))
-      .addSubMenu(ui.createMenu('관리')
-        .addItem('확정 취소', 'S3_2_확정취소')
-        .addItem('예약대기 취소', 'S8_3_예약대기취소')
-        .addItem('작업자 배정 해제', 'S9_2_배정해제')
-        .addSeparator()
-        .addItem('연결 상태 확인', '점검_연결확인')
-        .addItem('시트 구조 점검', '진단_시트구조')
+    ui.createMenu('📦 Polar Penguin')
+      .addSubMenu(ui.createMenu('📥 Input 처리')
+        .addItem('Input 지금 처리', 'processInput'))
+      .addSubMenu(ui.createMenu('📦 주문/피킹')
+        .addItem('주문 확정', 'S3_1_주문확정')
+        .addItem('피킹지시 생성', 'S4_1_피킹지시생성')
+        .addItem('결과 반영', 'S5_2_수동반영')
+        .addItem('작업지시서 출력', 'S9_1_작업지시서출력'))
+      .addSubMenu(ui.createMenu('📊 운영')
+        .addItem('대시보드 갱신', 'D0_대시보드전체갱신')
+        .addItem('예약대기 조회', '운영_예약대기조회')
+        .addItem('시스템 상태 확인', '진단_시트구조'))
+      .addSubMenu(ui.createMenu('⚙ 관리')
+        .addItem('시스템 설치/복구', 'setupSystem')
+        .addItem('로그 정리', '정리_로그')
         .addItem('설정 캐시 초기화', '설정_캐시초기화'))
       .addToUi();
   } catch (err) {
     Logger.log('메뉴 생성 실패: ' + err.message);
   }
+}
+
+function 운영_예약대기조회() {
+  refreshOperationalViews_();
+  var ss = consoleSS_();
+  var sh = ss.getSheetByName('예약대기');
+  if (sh) ss.setActiveSheet(sh);
+  return S8_2_예약대기조회();
 }
 
 /** 재고이동로그를 최근 N행만 남기고 정리 */

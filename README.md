@@ -38,17 +38,11 @@ setupSystem();
 
 첫 실행 시 Drive, Spreadsheet, Script trigger, Gmail 권한 요청을 승인합니다. `setupSystem()`은 다음 구조를 생성하거나 기존 리소스를 재사용합니다.
 
+> Only one operational Google Spreadsheet is used.
+
 ```text
 ROOT_FOLDER/
-├── 01 Console/
-│   └── Polar Penguin Console
-├── 02 Master/
-│   └── 상품마스터
-├── 03 Orders/
-│   └── 주문완료
-├── 04 Picking/
-│   ├── 피킹헤더
-│   └── 피킹라인
+├── Polar Penguin
 ├── Input/
 ├── Processed/
 ├── Error/
@@ -56,13 +50,30 @@ ROOT_FOLDER/
 └── Backup/
 ```
 
-Console에는 `설정`, `재고이동로그`, `작업로그`, `입력처리로그`가 구성됩니다. 주문, 재고, 피킹 대시보드는 각 업무 Spreadsheet에 생성됩니다. setup은 표준 헤더, validation, 서식도 함께 보증합니다.
+`Polar Penguin`은 하나의 Google Spreadsheet이며 다음 탭을 가집니다.
+
+```text
+📖 안내
+📊 대시보드
+상품마스터
+주문(완료)
+피킹(헤더)
+피킹(라인)
+예약대기
+주문반려
+재고이동로그
+작업로그
+입력처리로그
+설정
+```
+
+`예약대기`와 `주문반려`는 `주문(완료)`의 현재 상태에서 갱신되는 조회용 탭입니다. 별도의 원장이 아닙니다. setup은 표준 헤더, validation, 서식, 안내와 통합 대시보드도 함께 보증합니다.
 
 `setupSystem()`은 install + repair 방식입니다. 다시 실행해도 폴더, Spreadsheet, 설정 행, 헤더, trigger를 중복 생성하지 않으며 기존 업무 데이터를 초기화하지 않습니다.
 
 ## 필수 설정
 
-Console Spreadsheet의 `설정` 시트에서 확인합니다.
+`Polar Penguin` Spreadsheet의 `설정` 시트에서 확인합니다.
 
 | 키 | 용도 | 기본/주의사항 |
 |---|---|---|
@@ -80,7 +91,7 @@ Console Spreadsheet의 `설정` 시트에서 확인합니다.
 1. 카페24에서 주문 또는 재고 파일을 내려받습니다.
 2. 파일명을 바꾸거나 주문/재고별 폴더로 나누지 말고 `Input` 직하위에 업로드합니다.
 3. 설정된 폴링 주기를 기다립니다.
-4. 바로 처리하려면 Console의 `📦 피킹 운영 → 📥 Input 지금 처리`를 선택하거나 Apps Script에서 `processInput()`을 실행합니다.
+4. 바로 처리하려면 Spreadsheet의 `📦 Polar Penguin → 📥 Input 처리 → Input 지금 처리`를 선택하거나 Apps Script에서 `processInput()`을 실행합니다.
 
 지원 형식은 CSV와 Google Spreadsheet입니다. Google Spreadsheet는 첫 번째 시트를 읽습니다. CSV는 UTF-8을 우선 사용하고 깨진 문자가 있으면 EUC-KR/CP949로 다시 읽습니다. Excel `.xlsx`는 지원하지 않으므로 CSV 또는 Google Spreadsheet로 변환해야 합니다.
 
@@ -127,10 +138,10 @@ PDF 파일명은 `<피킹지시번호>.pdf`입니다. Output 전체에 같은 �
 
 ## 피킹 결과 입력
 
-1. `Output` PDF 또는 Console 메뉴의 `작업지시서 출력`으로 피킹합니다.
+1. `Output` PDF 또는 Spreadsheet 메뉴의 `작업지시서 출력`으로 피킹합니다.
 2. `피킹(라인)`의 `확인`에 `O` 또는 `X`를 입력합니다.
 3. `O`는 정상 피킹, `X`는 예외입니다. `X`일 때는 `예외사유`에 `재고없음` 또는 `불량재고`를 선택합니다.
-4. 폴링 trigger가 S5 결과반영을 수행합니다. 바로 반영하려면 메뉴의 `S5. 재고 반영 · 취소 처리`를 선택합니다.
+4. 폴링 trigger가 S5 결과반영을 수행합니다. 바로 반영하려면 메뉴의 `주문/피킹 → 결과 반영`을 선택합니다.
 
 한 주문의 품목 중 하나라도 `X`면 기존 규칙에 따라 주문 전체를 취소하고 이미 예약한 재고를 복원합니다.
 
@@ -162,8 +173,9 @@ PDF 파일명은 `<피킹지시번호>.pdf`입니다. Output 전체에 같은 �
 
 ## 운영 점검
 
-- Console 메뉴의 `연결 상태 확인`: 업무 Spreadsheet 연결 확인
-- `시트 구조 점검`: 필수 컬럼, Console 탭, 대시보드, trigger 확인
+- `📊 대시보드`의 작업 영역은 실행 가능한 셀 버튼이 아니라 메뉴 위치를 보여주는 안내입니다. Apps Script는 일반 셀 클릭에 함수를 연결할 수 없으므로 실제 작업은 상단 커스텀 메뉴에서 실행합니다. Drawing/Image 버튼은 사용자 편집 과정에서 함수 할당이 필요해 setup이 자동 생성하지 않습니다.
+- 메뉴의 `시스템 상태 확인`: 단일 Spreadsheet 연결, 필수 탭/컬럼, trigger 확인
+- `📖 안내`: 현재 Input → 주문/재고 → 피킹 → O/X 결과 반영 흐름과 폴더/용어 설명
 - `진단_주문폴더()`: 호환 함수명이며 통합 Input 파일의 헤더 판별 결과를 로그에 출력
 - `설정 캐시 초기화`: 설정 시트 수정 후 바로 반영할 때 사용
 - `setupSystem()`: 누락된 폴더, 시트, 헤더, validation, trigger를 복구

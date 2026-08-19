@@ -52,7 +52,7 @@ test('missing header detection is idempotent and accepts aliases only for popula
   );
 });
 
-test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and preserves data', () => {
+test('setupSystem creates exactly one operational spreadsheet, reruns safely, repairs tabs, and preserves data', () => {
   let sequence = 1;
   const spreadsheets = new Map();
   const folders = new Map();
@@ -60,6 +60,7 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
   const properties = new Map();
   let triggers = [];
   let dashboardRefreshes = 0;
+  const validationLists = [];
 
   class FakeRange {
     constructor(sheet, row, col, rows = 1, cols = 1) {
@@ -77,7 +78,7 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
     setValue(value) { this.sheet.set(this.row, this.col, value); return this; }
   }
   ['setFontWeight', 'setBackground', 'setFontColor', 'setVerticalAlignment', 'setNumberFormat',
-    'setDataValidation', 'setHelpText'].forEach((method) => {
+    'setDataValidation', 'setHelpText', 'setFontSize', 'setWrap', 'merge', 'setNote'].forEach((method) => {
     FakeRange.prototype[method] = function noop() { return this; };
   });
 
@@ -98,8 +99,12 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
     insertColumnsAfter(after, count) { this.maxCols = Math.max(this.maxCols, after + count); }
     getRange(row, col, rows, cols) { return new FakeRange(this, row, col, rows || 1, cols || 1); }
     getDataRange() { return this.getRange(1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
+    clearContents() { this.cells.clear(); return this; }
+    clearFormats() { return this; }
     setFrozenRows() { return this; }
     autoResizeColumns() { return this; }
+    setColumnWidth() { return this; }
+    setHiddenGridlines() { return this; }
   }
 
   class FakeSpreadsheet {
@@ -114,6 +119,7 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
     getSheets() { return this.sheets.slice(); }
     getSheetByName(name) { return this.sheets.find((sheet) => sheet.name === name) || null; }
     insertSheet(name) { const sheet = new FakeSheet(name, this); this.sheets.push(sheet); return sheet; }
+    deleteSheet(sheet) { this.sheets = this.sheets.filter((item) => item !== sheet); }
   }
 
   class FakeFile {
@@ -164,7 +170,7 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
     },
     getActiveSpreadsheet: () => null,
     newDataValidation: () => ({
-      requireValueInList() { return this; }, setAllowInvalid() { return this; },
+      requireValueInList(values) { validationLists.push(values); return this; }, setAllowInvalid() { return this; },
       setHelpText() { return this; }, build() { return {}; }
     })
   };
@@ -192,55 +198,65 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
 
   const first = context.setupSystem();
   assert.equal(properties.get('ROOT_FOLDER_ID'), root.getId());
-  assert.equal(first.folders.filter((item) => item.created).length, 9);
+  assert.equal(first.folders.filter((item) => item.created).length, 5);
   assert.deepEqual(plain(first.folders.map((item) => item.name)),
-    ['01 Console', '02 Master', '03 Orders', '04 Picking', 'Input', 'Processed', 'Error', 'Output', 'Backup']);
-  assert.equal(first.spreadsheets.filter((item) => item.created).length, 5);
-  assert.equal(spreadsheets.size, 5);
+    ['Input', 'Processed', 'Error', 'Output', 'Backup']);
+  assert.equal(first.spreadsheets.filter((item) => item.created).length, 1);
+  assert.equal(spreadsheets.size, 1, 'regression: setup must never create five operational spreadsheets');
   assert.deepEqual(triggers.map((trigger) => trigger.getHandlerFunction()).sort(), ['onOpen', 'processInput', 'syncAndRefresh']);
 
-  const consoleSs = spreadsheets.get(properties.get('CONSOLE_SS_ID'));
-  const configSheet = consoleSs.getSheetByName('설정');
+  const operationSs = spreadsheets.get(properties.get('OPERATION_SPREADSHEET_ID'));
+  assert.equal(properties.get('CONSOLE_SS_ID'), operationSs.getId());
+  const expectedTabs = ['📖 안내', '📊 대시보드', '상품마스터', '주문(완료)', '피킹(헤더)',
+    '피킹(라인)', '예약대기', '주문반려', '재고이동로그', '작업로그', '입력처리로그', '설정'];
+  assert.deepEqual(operationSs.getSheets().map((sheet) => sheet.getName()).sort(), expectedTabs.slice().sort());
+  assert.ok(validationLists.some((values) => values.join(',') === 'O,X'));
+  assert.ok(validationLists.some((values) => values.join(',') === '재고없음,불량재고'));
+  assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input 파일 업로드/);
+
+  const configSheet = operationSs.getSheetByName('설정');
   const configValues = configSheet.getDataRange().getValues();
   const inputId = properties.get('FOLDER_ID_INPUT');
   for (const key of ['통합Input폴더ID', 'CSV폴더ID', '재고CSV폴더ID']) {
     const row = configValues.find((value) => value[0] === '파라미터' && value[1] === key);
     assert.equal(row[2], inputId);
   }
-  assert.ok(consoleSs.getSheetByName('입력처리로그'));
+  assert.ok(operationSs.getSheetByName('입력처리로그'));
   const pollingRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '폴링주기(분)') + 1;
   configSheet.getRange(pollingRow, 3).setValue(15);
 
-  const orderSs = spreadsheets.get(properties.get('SPREADSHEET_ID_ORDERS'));
-  const orderSheet = orderSs.getSheetByName('주문(완료)');
+  const orderSheet = operationSs.getSheetByName('주문(완료)');
+  const orderHeaders = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
+  for (const header of ['주문번호', '품목별 주문번호', '상품품목코드', '수령인 휴대전화',
+    '수령인 우편번호', '수령인 주소', '배송메시지', '출고완료', '피킹지시번호', '주문상태',
+    '취소사유', '취소일시', '확정일시', '대기사유']) {
+    assert.ok(orderHeaders.includes(header), `order schema is missing ${header}`);
+  }
   orderSheet.getRange(2, 1).setValue('ORDER-KEEP');
-  const masterSs = spreadsheets.get(properties.get('SPREADSHEET_ID_MASTER'));
-  masterSs.getSheetByName('상품마스터').getRange(2, 1).setValue('SKU-KEEP');
+  operationSs.getSheetByName('상품마스터').getRange(2, 1).setValue('SKU-KEEP');
 
   const second = context.setupSystem();
   assert.equal(second.folders.filter((item) => item.created).length, 0);
   assert.equal(second.spreadsheets.filter((item) => item.created).length, 0);
-  assert.equal(spreadsheets.size, 5);
+  assert.equal(spreadsheets.size, 1);
   assert.equal(configSheet.getRange(pollingRow, 3).getValue(), 15);
   assert.equal(orderSheet.getRange(2, 1).getValue(), 'ORDER-KEEP');
-  assert.equal(masterSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
+  assert.equal(operationSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
   assert.equal(triggers.length, 3);
   assert.equal(triggers.find((trigger) => trigger.getHandlerFunction() === 'syncAndRefresh').minutes, 15);
 
-  const oldHeaderId = properties.get('SPREADSHEET_ID_PICKING_HEADER');
-  const oldHeaderFile = files.get(oldHeaderId);
-  oldHeaderFile.parent.files = oldHeaderFile.parent.files.filter((file) => file !== oldHeaderFile);
-  files.delete(oldHeaderId);
-  spreadsheets.delete(oldHeaderId);
+  operationSs.deleteSheet(operationSs.getSheetByName('피킹(헤더)'));
 
   const repaired = context.setupSystem();
-  assert.equal(repaired.spreadsheets.filter((item) => item.created).length, 1);
-  const repairedHeaderId = properties.get('SPREADSHEET_ID_PICKING_HEADER');
-  assert.notEqual(repairedHeaderId, oldHeaderId);
-  const repairedConfig = configSheet.getDataRange().getValues();
-  const headerConfig = repairedConfig.find((row) => row[0] === '파일ID' && row[1] === '피킹헤더');
-  assert.equal(headerConfig[2], repairedHeaderId);
-  assert.equal(spreadsheets.size, 5);
+  assert.equal(repaired.spreadsheets.filter((item) => item.created).length, 0);
+  assert.ok(operationSs.getSheetByName('피킹(헤더)'));
+  assert.equal(operationSs.getSheetByName('주문(완료)').getRange(2, 1).getValue(), 'ORDER-KEEP');
+  assert.equal(spreadsheets.size, 1);
   assert.equal(triggers.length, 3);
   assert.equal(dashboardRefreshes, 3);
+
+  for (const role of [context.ROLE.마스터, context.ROLE.주문, context.ROLE.헤더, context.ROLE.라인]) {
+    assert.equal(context.openSS_(role).getId(), operationSs.getId());
+    assert.equal(context.getSheet_(role).getParent().getId(), operationSs.getId());
+  }
 });

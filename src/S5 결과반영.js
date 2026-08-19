@@ -343,13 +343,12 @@ function S5_2_수동반영() {
   );
 }
 
-/** 트리거 진입점 — 반영 후 대시보드 3종 갱신 */
+/** 트리거 진입점 — 반영 후 단일 통합 대시보드 갱신 */
 function syncAndRefresh() {
   try {
     S5_1_결과반영();
   } finally {
-    try { D1_주문현황갱신(); } catch (e) { writeOpLog_('D1_주문현황갱신', '실패', e.message); }
-    try { D2_재고현황갱신(); } catch (e) { writeOpLog_('D2_재고현황갱신', '실패', e.message); }
-    try { D3_피킹현황갱신(); } catch (e) { writeOpLog_('D3_피킹현황갱신', '실패', e.message); }
+    try { D0_대시보드전체갱신(true); }
+    catch (e) { writeOpLog_('D0_대시보드전체갱신', '실패', e.message); }
   }
 }

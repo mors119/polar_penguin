@@ -4,13 +4,13 @@
  * ============================================================
  *  S0. 공통 정의와 런타임 유틸리티
  * ============================================================
- *  시트/열/상태의 표준 정의, Console·업무 Spreadsheet 연결,
+ *  시트/열/상태의 표준 정의, 단일 운영 Spreadsheet 연결,
  *  테이블 IO, 재고/작업 로깅, LockService, UI 알림을 한곳에서 제공한다.
  *  다른 모듈은 시트명과 컬럼명을 직접 중복하지 않고 이 정의를 사용한다.
  * ============================================================
  */
 
-/** setup 이전 환경을 위한 기존 fallback. 정상 설치는 Script Property의 CONSOLE_SS_ID를 사용한다. */
+/** setup 이전 환경을 위한 기존 fallback. 정상 설치는 OPERATION_SPREADSHEET_ID를 사용한다. */
 var CONSOLE_SS_ID = '';
 
 var CONSOLE = {
@@ -24,9 +24,9 @@ var INPUT_LOG_HEADERS = ['처리시각', '파일ID', '파일명', '체크섬', '
 
 var ROLE = {
   마스터: '상품마스터',
-  주문: '주문완료',
-  헤더: '피킹헤더',
-  라인: '피킹라인'
+  주문: '주문(완료)',
+  헤더: '피킹(헤더)',
+  라인: '피킹(라인)'
 };
 
 /** 표준 컬럼명 */
@@ -93,17 +93,18 @@ var _cache = { config: null, ss: {}, consoleSS: null };
 var _scriptLockDepth = 0;
 
 /* ============================================================
- *  콘솔 스프레드시트 접근
+ *  단일 운영 스프레드시트 접근
  * ============================================================ */
 
 function consoleSS_() {
   if (_cache.consoleSS) return _cache.consoleSS;
 
   var ss = null;
-  var propertyId = PropertiesService.getScriptProperties().getProperty('CONSOLE_SS_ID');
+  var props = PropertiesService.getScriptProperties();
+  var propertyId = props.getProperty('OPERATION_SPREADSHEET_ID') || props.getProperty('CONSOLE_SS_ID');
   if (propertyId) {
     try { ss = SpreadsheetApp.openById(propertyId); }
-    catch (e) { throw new Error('Script Property의 CONSOLE_SS_ID 파일을 열 수 없습니다. (' + propertyId + ')'); }
+    catch (e) { throw new Error('Script Property의 운영 Spreadsheet를 열 수 없습니다. (' + propertyId + ')'); }
   }
 
   if (!ss) {
@@ -124,6 +125,7 @@ function consoleSS_() {
   return ss;
 }
 
+/** 레거시 수동 설치 호환용. 새 설치는 setRootFolder()와 setupSystem()을 사용한다. */
 function 설정_콘솔파일지정() {
   var 입력 = PropertiesService.getScriptProperties().getProperty('CONSOLE_SS_ID') || CONSOLE_SS_ID;
   if (!입력) throw new Error('CONSOLE_SS_ID 에 스프레드시트 ID나 URL을 입력하세요.');
@@ -135,7 +137,7 @@ function 설정_콘솔파일지정() {
   PropertiesService.getScriptProperties().setProperty('CONSOLE_SS_ID', m[0]);
   _cache.consoleSS = null;
 
-  var msg = '콘솔 파일 지정 완료: ' + ss.getName();
+  var msg = '운영 Spreadsheet 지정 완료: ' + ss.getName();
   Logger.log(msg);
   return msg;
 }
@@ -176,30 +178,21 @@ function param_(키, 기본값) {
 }
 
 /* ============================================================
- *  외부 파일 접근
+ *  역할별 시트 접근
  * ============================================================ */
 
 function openSS_(role) {
-  if (_cache.ss[role]) return _cache.ss[role];
-
-  var raw = getConfig_().파일ID[role];
-  var m = String(raw || '').match(/[-\w]{25,}/);
-  if (!m) throw new Error('[설정] 탭의 파일ID에 "' + role + '" 가 없습니다.');
-
-  var ss;
-  try { ss = SpreadsheetApp.openById(m[0]); }
-  catch (e) { throw new Error('"' + role + '" 파일을 열 수 없습니다. (ID: ' + m[0] + ')'); }
-
-  _cache.ss[role] = ss;
+  if (_cache.ss.operation) return _cache.ss.operation;
+  var ss = consoleSS_();
+  _cache.ss.operation = ss;
   return ss;
 }
 
 function getSheet_(role) {
   var ss = openSS_(role);
-  var name = getConfig_().시트명[role];
+  var name = getConfig_().시트명[role] || role;
   var sh = name ? ss.getSheetByName(name) : null;
-  if (!sh) sh = ss.getSheets()[0];
-  if (!sh) throw new Error('"' + role + '" 파일에 시트가 없습니다.');
+  if (!sh) throw new Error('운영 Spreadsheet에 "' + name + '" 탭이 없습니다. setupSystem()으로 복구하세요.');
   return sh;
 }
 
@@ -414,7 +407,7 @@ function bar_(pct, len) {
   return new Array(filled + 1).join('█') + new Array(len - filled + 1).join('░');
 }
 
-/** 대시보드 탭을 확보한다 (외부 파일에도 만들 수 있다) */
+/** 단일 운영 Spreadsheet의 대시보드 탭을 확보한다. */
 function ensureDashSheet_(ss, name) {
   var sh = ss.getSheetByName(name);
   if (!sh) {
@@ -438,12 +431,12 @@ var DASHCOLOR = {
   선: 'BFC9D4'
 };
 
-/** 더 이상 사용하지 않는 `입고`/`대시보드` Console 탭을 제거하고 작업로그를 500건으로 줄인다. */
+/** 더 이상 사용하지 않는 레거시 탭을 제거하고 작업로그를 500건으로 줄인다. */
 function 정리_불필요탭() {
   var ss = consoleSS_();
   var out = [];
 
-  ['입고', '대시보드'].forEach(function (name) {
+  ['입고', '대시보드', '📊 주문현황', '📊 재고현황', '📊 피킹현황'].forEach(function (name) {
     var sh = ss.getSheetByName(name);
     if (!sh) { out.push('· ' + name + ' — 이미 없음'); return; }
     ss.deleteSheet(sh);
