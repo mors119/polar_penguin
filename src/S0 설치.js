@@ -34,7 +34,8 @@ function 설치_2_시트정비(silent) {
   /* ---------- 주문 (완료) ---------- */
   var 주문 = readTable_(ROLE.주문);
   var 추가주문 = ensureColumns_(주문.sheet, 주문.headers, [
-    COL.피킹지시번호, COL.주문상태, COL.취소사유, COL.취소일시, COL.확정일시, COL.대기사유
+    COL.피킹지시번호, COL.주문상태, COL.취소사유, COL.취소일시, COL.취소경로,
+    COL.확정일시, COL.대기사유, '운영메모'
   ]);
   결과.push('주문(완료): ' + (추가주문.length ? '열 추가 ' + 추가주문.join(', ') : '변경 없음'));
 
@@ -43,7 +44,9 @@ function 설치_2_시트정비(silent) {
   if (주문.rows.length) {
     var 상태값 = 주문.rows.map(function (r) {
       var s = toStr_(r[c주문상태]);
-      if (!s || s === '정상') return [ENUM.주문상태.접수];
+      if (toNum_(r[col_(주문, COL.출고완료, true)]) === 1) return [ENUM.주문상태.출고완료];
+      if (!s || s === '정상' || s === '접수' || s === '예약대기') return [ENUM.주문상태.예약];
+      if (s === '확정') return [ENUM.주문상태.예약];
       return [r[c주문상태]];
     });
     주문.sheet.getRange(2, c주문상태 + 1, 상태값.length, 1).setValues(상태값);
@@ -51,8 +54,8 @@ function 설치_2_시트정비(silent) {
 
   주문.sheet.getRange(2, c주문상태 + 1, Math.max(주문.sheet.getMaxRows() - 1, 1), 1)
     .setDataValidation(SpreadsheetApp.newDataValidation()
-      .requireValueInList([ENUM.주문상태.접수, ENUM.주문상태.확정,
-                           ENUM.주문상태.예약대기, ENUM.주문상태.취소], true)
+      .requireValueInList([ENUM.주문상태.처리완료, ENUM.주문상태.예약,
+                           ENUM.주문상태.출고완료, ENUM.주문상태.취소], true)
       .setAllowInvalid(false).build());
 
   [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, '수령인 우편번호', '수령인 휴대전화']
@@ -68,10 +71,18 @@ function 설치_2_시트정비(silent) {
 
   헤더 = readTable_(ROLE.헤더);
   var c헤더상태 = col_(헤더, COL.상태, true);
+  if (헤더.rows.length) {
+    헤더.sheet.getRange(2, c헤더상태 + 1, 헤더.rows.length, 1).setValues(헤더.rows.map(function (r) {
+      var s = toStr_(r[c헤더상태]);
+      if (s === '예외') return [ENUM.헤더상태.취소];
+      if (s === '진행') return [ENUM.헤더상태.대기];
+      return [s || ENUM.헤더상태.대기];
+    }));
+  }
   헤더.sheet.getRange(2, c헤더상태 + 1, Math.max(헤더.sheet.getMaxRows() - 1, 1), 1)
     .setDataValidation(SpreadsheetApp.newDataValidation()
-      .requireValueInList([ENUM.헤더상태.대기, ENUM.헤더상태.진행,
-                           ENUM.헤더상태.완료, ENUM.헤더상태.예외], true)
+      .requireValueInList([ENUM.헤더상태.대기, ENUM.헤더상태.완료,
+                           ENUM.헤더상태.취소, ENUM.헤더상태.출력오류], true)
       .setAllowInvalid(false).build());
 
   // 담당자 칸을 노란색으로 — 여기 이름을 적으면 라인까지 전파된다
@@ -83,7 +94,7 @@ function 설치_2_시트정비(silent) {
   /* ---------- 피킹 (라인) ---------- */
   var 라인 = readTable_(ROLE.라인);
   var 추가라인 = ensureColumns_(라인.sheet, 라인.headers, [
-    COL.피킹지시번호, COL.담당자, COL.라인상태, COL.처리일시
+    COL.주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태, COL.처리일시
   ]);
   결과.push('피킹(라인): ' + (추가라인.length ? '열 추가 ' + 추가라인.join(', ') : '변경 없음'));
 
@@ -94,7 +105,10 @@ function 설치_2_시트정비(silent) {
 
   if (라인.rows.length) {
     var 라인상태값 = 라인.rows.map(function (r) {
-      return [isBlank_(r[c라인상태]) ? ENUM.라인상태.미처리 : r[c라인상태]];
+      var s = toStr_(r[c라인상태]);
+      if (s === '차감완료') return [ENUM.라인상태.완료];
+      if (s === '복원완료' || s === '취소마감') return [ENUM.라인상태.취소];
+      return [s || ENUM.라인상태.미처리];
     });
     라인.sheet.getRange(2, c라인상태 + 1, 라인상태값.length, 1).setValues(라인상태값);
   }
@@ -112,6 +126,13 @@ function 설치_2_시트정비(silent) {
   라인.sheet.getRange(1, c확인 + 1).setNote(
     'O = 정상, X = 예외입니다. X 입력 시 예외사유를 선택하세요. 결과는 자동 반영되며 필요하면 상단 메뉴에서 즉시 반영할 수 있습니다.');
   라인.sheet.getRange(1, c예외 + 1).setNote('X인 행은 재고없음 또는 불량재고를 선택하세요.');
+  라인.sheet.getRange(2, c확인 + 1, maxRows, 1).setBackground('FFF2CC');
+  라인.sheet.getRange(2, c예외 + 1, maxRows, 1).setBackground('FFF2CC');
+  라인.headers.forEach(function (header, idx) {
+    if ([COL.확인, COL.예외사유].indexOf(toStr_(header)) >= 0) return;
+    라인.sheet.getRange(1, idx + 1).setNote('시스템 생성 필드입니다. 확인(O/X)과 예외사유만 입력하세요.');
+    라인.sheet.getRange(2, idx + 1, maxRows, 1).setBackground('F2F2F2');
+  });
   라인.sheet.setColumnWidth(c확인 + 1, 80);
   라인.sheet.setColumnWidth(c예외 + 1, 120);
   [COL.순번, COL.보관위치, COL.상품코드, COL.상품명, COL.옵션, COL.필요수량,
@@ -130,7 +151,7 @@ function 설치_2_시트정비(silent) {
   /* ---------- 상품마스터 ---------- */
   var 마스터 = readTable_(ROLE.마스터);
   var 추가마스터 = ensureColumns_(마스터.sheet, 마스터.headers, [
-    COL.예약재고, COL.예약상품, COL.재고관리, COL.판매가, COL.최종동기화
+    COL.예약재고, COL.예약상품, COL.재고관리, COL.판매가, COL.최종동기화, '창고메모'
   ]);
   마스터 = readTable_(ROLE.마스터);
 
@@ -148,6 +169,23 @@ function 설치_2_시트정비(silent) {
     col_(마스터, n, true);
   });
   결과.push('상품마스터: ' + (추가마스터.length ? '열 추가 ' + 추가마스터.join(', ') : '변경 없음'));
+  var c위치 = col_(마스터, COL.기본보관위치, true);
+  마스터.sheet.getRange(1, c위치 + 1).setNote('창고 소유 필드입니다. 재고 동기화가 덮어쓰지 않으며 운영자가 직접 관리합니다.');
+  마스터.sheet.getRange(2, c위치 + 1, Math.max(마스터.sheet.getMaxRows() - 1, 1), 1).setBackground('FFF9E6');
+  var c창고메모 = col_(마스터, '창고메모', false);
+  if (c창고메모 >= 0) {
+    마스터.sheet.getRange(1, c창고메모 + 1).setNote('창고 소유 메모입니다. 자동 동기화가 덮어쓰지 않습니다.');
+    마스터.sheet.getRange(2, c창고메모 + 1, Math.max(마스터.sheet.getMaxRows() - 1, 1), 1).setBackground('FFF9E6');
+  }
+
+  [COL.주문상태, COL.출고완료, COL.피킹지시번호, COL.확정일시, COL.취소일시, COL.취소경로]
+    .forEach(function (name) {
+      var idx = col_(주문, name, false); if (idx < 0) return;
+      주문.sheet.getRange(1, idx + 1).setNote('시스템 관리 필드입니다. 메뉴와 자동 처리 결과로만 변경하세요.');
+      주문.sheet.getRange(2, idx + 1, Math.max(주문.sheet.getMaxRows() - 1, 1), 1).setBackground('F2F2F2');
+    });
+  var c메모 = col_(주문, '운영메모', false);
+  if (c메모 >= 0) 주문.sheet.getRange(2, c메모 + 1, Math.max(주문.sheet.getMaxRows() - 1, 1), 1).setBackground('FFF9E6');
 
   var msg = '시트 정비 완료\n\n' + 결과.join('\n') +
             '\n\n참고: 공식 설치는 setupSystem()이 트리거와 대시보드까지 연속 구성합니다.';
@@ -286,25 +324,30 @@ function onOpen(e) {
     ui.createMenu('📦 Polar Penguin')
       .addSubMenu(ui.createMenu('📥 Input')
         .addItem('Input 지금 처리', 'processInput'))
-      .addSubMenu(ui.createMenu('📄 작업')
+      .addSubMenu(ui.createMenu('📋 주문')
+        .addItem('선택 주문 취소', '선택_주문취소')
+        .addItem('예약 주문 피킹서 생성', '예약_주문피킹서생성'))
+      .addSubMenu(ui.createMenu('📄 피킹')
         .addItem('작업지시서 조회/재출력', 'S9_1_작업지시서출력')
         .addItem('피킹 결과 지금 반영', 'S5_2_수동반영'))
       .addSubMenu(ui.createMenu('📊 운영')
         .addItem('대시보드 갱신', 'D0_대시보드전체갱신')
-        .addItem('예약대기 현황', '운영_예약대기조회')
         .addItem('시스템 상태 확인', '진단_시트구조'))
       .addSubMenu(ui.createMenu('⚙ 관리')
         .addItem('시스템 설치/복구', 'setupSystem')
-        .addItem('로그 정리', '정리_로그')
-        .addItem('설정 캐시 초기화', '설정_캐시초기화'))
+        .addItem('설정 보기', '설정_보기')
+        .addItem('로그 정리', '정리_로그'))
       .addToUi();
   } catch (err) {
     Logger.log('메뉴 생성 실패: ' + err.message);
   }
 }
 
-function 운영_예약대기조회() {
-  return S8_2_예약대기조회();
+function 설정_보기() {
+  var ss = consoleSS_(), sheet = ss.getSheetByName(CONSOLE.설정);
+  if (sheet && typeof sheet.showSheet === 'function') sheet.showSheet();
+  if (sheet && typeof ss.setActiveSheet === 'function') ss.setActiveSheet(sheet);
+  return sheet;
 }
 
 /** 재고이동로그를 최근 N행만 남기고 정리 */

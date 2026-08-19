@@ -44,7 +44,7 @@ function S9_미배정슬롯조회() {
   var 미배정 = 0, 배정 = {};
   헤더.rows.forEach(function (r) {
     var 상태 = toStr_(r[H.상태]);
-    if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.예외) return;
+    if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.취소) return;
     var 담당 = toStr_(r[H.담당]);
     if (담당) 배정[담당] = (배정[담당] || 0) + 1;
     else 미배정++;
@@ -88,7 +88,7 @@ function S9_지시서생성(이름, 개수, options) {
     var 내슬롯 = [];
     헤더.rows.forEach(function (r, i) {
       var 상태 = toStr_(r[H.상태]);
-      if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.예외) return;
+      if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.취소) return;
       if (options.지시번호 && toStr_(r[H.지시]) !== String(options.지시번호)) return;
       if (options.readOnly || toStr_(r[H.담당]) === 이름) 내슬롯.push(i);
     });
@@ -99,7 +99,7 @@ function S9_지시서생성(이름, 개수, options) {
       var 후보 = [];
       헤더.rows.forEach(function (r, i) {
         var 상태 = toStr_(r[H.상태]);
-        if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.예외) return;
+        if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.취소) return;
         if (!isBlank_(r[H.담당])) return;
         후보.push({ idx: i, 슬롯: toNum_(r[H.슬롯]) });
       });
@@ -223,6 +223,28 @@ function S9_피킹PDF생성(지시번호, outputRoot) {
   return { 생성: true, 파일ID: file.getId(), 파일명: fileName };
 }
 
+/** 출력오류 또는 누락 PDF를 같은 지시번호로 복구한다. 재고와 피킹행은 만들지 않는다. */
+function S9_피킹PDF재시도(지시번호) {
+  지시번호 = toStr_(지시번호);
+  if (!지시번호) throw new Error('피킹지시번호를 입력하세요.');
+  var orders = S9_ordersForInstruction_(지시번호);
+  if (!orders.length) throw new Error('피킹지시번호를 찾을 수 없습니다: ' + 지시번호);
+  try {
+    var result = S9_피킹PDF생성(지시번호, inputFolder_('Output폴더ID'));
+    markPickingOutputState_(지시번호, ENUM.헤더상태.대기);
+    markOrdersReady_(orders); D0_대시보드전체갱신(true);
+    return { 메시지: (result.재사용 ? '기존 PDF를 확인했습니다.' : 'PDF를 다시 생성했습니다.') + ' ' + 지시번호 };
+  } catch (e) {
+    markPickingOutputState_(지시번호, ENUM.헤더상태.출력오류); throw e;
+  }
+}
+
+function S9_ordersForInstruction_(instructionNo) {
+  var table = readTable_(ROLE.헤더), cInstruction = col_(table, COL.피킹지시번호, true), cOrder = col_(table, COL.주문번호, true), found = {};
+  table.rows.forEach(function (row) { if (toStr_(row[cInstruction]) === instructionNo) found[toStr_(row[cOrder])] = true; });
+  return Object.keys(found).filter(String);
+}
+
 function S9_findPDF_(outputRoot, fileName) {
   if (outputRoot.getFilesByName(fileName).hasNext()) return true;
   var folders = outputRoot.getFolders();
@@ -310,6 +332,10 @@ function 작업지시서_HTML_() {
 '    &nbsp;&nbsp;<button class="primary" id="go">불러오기</button>',
 '    <div class="info" id="status">현황을 불러오는 중…</div>',
 '  </div>',
+'  <div class="panel">',
+'    <label>PDF 조회/복구</label><input type="text" id="instruction" placeholder="예: PK-20260819-001">',
+'    &nbsp;&nbsp;<button class="primary" id="retry">PDF 확인/재생성</button>',
+'  </div>',
 '  <div id="msg"></div>',
 '</div>',
 '<div id="out"></div>',
@@ -338,6 +364,12 @@ function 작업지시서_HTML_() {
 '    .withFailureHandler(function(e){ btn.disabled=false; btn.textContent="불러오기";',
 '      document.getElementById("msg").innerHTML = "<div class=\\"err\\">"+esc(e.message)+"</div>"; })',
 '    .S9_지시서생성(nm, n);',
+'};',
+'document.getElementById("retry").onclick = function(){',
+'  var no=document.getElementById("instruction").value.trim(); if(!no){alert("피킹지시번호를 입력하세요.");return;}',
+'  var btn=this; btn.disabled=true;',
+'  google.script.run.withSuccessHandler(function(r){btn.disabled=false;alert(r.메시지);})',
+'    .withFailureHandler(function(e){btn.disabled=false;alert(e.message);}).S9_피킹PDF재시도(no);',
 '};',
 '',
 'function render(r){',

@@ -2,7 +2,7 @@
  * ============================================================
  *  S4. 피킹지시 생성
  * ============================================================
- *  확정되었지만 피킹지시번호가 없는 주문을 찾아 주문별 피킹헤더와
+ *  재고 예약이 끝난 지정 주문을 찾아 주문별 피킹헤더와
  *  품목별 피킹라인을 생성한다. 카트 슬롯은 당일 기존 지시 다음 번호부터
  *  이어서 배정하며, 담당자는 현장 입력 또는 S9 작업지시서 생성 시 채운다.
  *
@@ -17,7 +17,8 @@
  * @return {Object} 생성 여부와 생성된 지시번호를 포함한 결과
  * @sideEffect 피킹헤더·피킹라인을 추가하고 주문완료에 피킹지시번호를 기록한다.
  */
-function S4_1_피킹지시생성() {
+function S4_1_피킹지시생성(orderNos, options) {
+  options = options || {};
   return withLock_(function () {
     // ---------- 주문 적재 ----------
     var 주문 = readTable_(ROLE.주문);
@@ -31,19 +32,33 @@ function S4_1_피킹지시생성() {
       주문상태: col_(주문, COL.주문상태, true)
     };
 
-    // ---------- 대상: 확정된 주문 중 아직 지시가 없는 것 ----------
+    var 지정 = {};
+    (orderNos || []).forEach(function (no) { 지정[toStr_(no)] = true; });
+    var 제한 = true; // 자동/수동 오케스트레이터가 명시한 주문만 생성한다.
+    var 기존지시 = {};
+    주문.rows.forEach(function (row) {
+      var no = toStr_(row[o.주문번호]);
+      var instruction = toStr_(row[o.지시번호]);
+      if (제한 && 지정[no] && instruction) 기존지시[instruction] = true;
+    });
+    if (Object.keys(기존지시).length === 1) {
+      return { 생성: false, 재사용: true, 지시번호: Object.keys(기존지시)[0], 주문수: Object.keys(지정).length };
+    }
+
+    // ---------- 대상: 재고 예약이 끝난 지정 주문 중 아직 지시가 없는 것 ----------
     var 대상 = [];
     for (var i = 0; i < 주문.rows.length; i++) {
       var r = 주문.rows[i];
       if (isBlank_(r[o.주문번호])) continue;
+      if (제한 && !지정[toStr_(r[o.주문번호])]) continue;
       if (toNum_(r[o.출고완료]) === 1) continue;
       if (!isBlank_(r[o.지시번호])) continue;
-      if (toStr_(r[o.주문상태]) !== ENUM.주문상태.확정) continue;
+      if (toStr_(r[o.주문상태]) !== ENUM.주문상태.예약) continue;
       대상.push({ rowIdx: i, row: r });
     }
 
     if (!대상.length) {
-      alert_('새로 피킹할 확정 주문이 없습니다.\n\n정상 운영에서는 Input 파이프라인이 주문 확정과 피킹지시 생성을 자동 수행합니다.');
+      if (!options.silent) alert_('새로 생성할 피킹지시가 없습니다.');
       return { 생성: false };
     }
 
@@ -66,7 +81,7 @@ function S4_1_피킹지시생성() {
       var 사유 = Object.keys(제외주문).map(function (k) {
         return '  · ' + k + ' → ' + 제외주문[k].join(', ');
       }).join('\n');
-      alert_('모든 주문이 상품마스터 미등록 코드를 포함해 제외되었습니다.\n\n' + 사유);
+      if (!options.silent) alert_('모든 주문이 상품마스터 미등록 코드를 포함해 제외되었습니다.\n\n' + 사유);
       return { 생성: false };
     }
 
@@ -101,9 +116,8 @@ function S4_1_피킹지시생성() {
     순서.forEach(function (no, idx) {
       var 슬롯 = 시작슬롯 + idx;
 
-      var 코드집합 = {}, 총수량 = 0;
+      var 총수량 = 0;
       그룹[no].forEach(function (t) {
-        코드집합[toStr_(t.row[o.상품코드])] = true;
         총수량 += toNum_(t.row[o.수량]);
       });
 
@@ -113,7 +127,7 @@ function S4_1_피킹지시생성() {
       row[h.지시번호] = 지시번호;
       row[h.주문번호] = no;
       row[h.슬롯] = 슬롯;
-      row[h.품목수] = Object.keys(코드집합).length;
+      row[h.품목수] = 그룹[no].length;
       row[h.총수량] = 총수량;
       row[h.담당자] = '';                       // 작업자 또는 S9 출력 과정에서 입력한다.
       row[h.상태] = ENUM.헤더상태.대기;
@@ -179,7 +193,7 @@ function S4_1_피킹지시생성() {
         Object.keys(제외주문).map(function (k) { return '  · ' + k + ' → ' + 제외주문[k].join(', '); }).join('\n');
     }
 
-    alert_(msg);
+    if (!options.silent) alert_(msg);
     writeOpLog_('S4_1_피킹지시생성', '성공', 지시번호 + ' / 주문 ' + 순서.length + '건 / 슬롯 ' + 시작슬롯);
     return { 생성: true, 지시번호: 지시번호, 주문수: 순서.length, 시작슬롯: 시작슬롯 };
   });
@@ -220,6 +234,7 @@ function buildPickingLines_(지시번호, 순서, 그룹, o, 마스터맵) {
     행: function (라인) {
       var c = {
         순번: col_(라인, COL.순번, true),
+        주문번호: col_(라인, COL.주문번호, true),
         보관위치: col_(라인, COL.보관위치, true),
         상품코드: col_(라인, COL.상품코드, true),
         이미지: col_(라인, COL.이미지, true),
@@ -239,6 +254,7 @@ function buildPickingLines_(지시번호, 순서, 그룹, o, 마스터맵) {
       return 원본.map(function (x) {
         var row = new Array(라인.width).fill('');
         row[c.순번] = x.순번;
+        row[c.주문번호] = x.주문번호;
         row[c.보관위치] = x.m.보관위치 || '';
         row[c.이미지] = x.m.이미지 || '';
         row[c.상품명] = x.m.상품명 || '';

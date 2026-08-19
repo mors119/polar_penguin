@@ -11,7 +11,8 @@
  *     (같은 파일을 두 번 올려도 중복 적재되지 않는다)
  *   · 주문번호·우편번호 등은 문자열로 강제해 앞자리 0을 보존한다
  *   · 신규 행은 시트 최상단에 삽입한다 (최신이 위로)
- *   · 초기 상태: 출고완료 0 · 피킹지시번호 공란 · 주문상태 접수
+ *   · 초기 상태: 출고완료 0 · 피킹지시번호 공란 · 주문상태 예약
+ *     (같은 실행 안에서 재고 확보와 PDF가 끝나면 처리완료로 전환)
  * ============================================================
  */
  
@@ -28,7 +29,7 @@ var TEXT_COLUMNS_ORDER = [
  * @param {GoogleAppsScript.Drive.File=} 입력파일 processInput이 판별한 단일 파일
  * @param {{silent:Boolean=}=} options 파이프라인의 알림 제어
  * @return {Object} 처리한 파일 수와 신규/중복/오류 행 수
- * @sideEffect 신규 주문을 접수 상태로 적재. 원본 이동은 통합 Input 파이프라인이 담당
+ * @sideEffect 신규 주문을 예약 상태로 적재. 원본 이동은 통합 Input 파이프라인이 담당
  */
 function S2_1_주문CSV취입(입력파일, options) {
   // 운영자가 이 내부 단계를 직접 실행해도 별도 폴더를 만들지 않고 표준 자동 흐름을 사용한다.
@@ -58,12 +59,13 @@ function S2_1_주문CSV취입(입력파일, options) {
       .map(function (n) { return col_(주문, n, false); })
       .filter(function (i) { return i >= 0; });
  
-    var 리포트 = [], 신규행 = [];
+    var 리포트 = [], 신규행 = [], 주문번호집합 = {};
     var 총신규 = 0, 총중복 = 0, 총오류 = 0;
  
     csvFiles.forEach(function (file) {
       var r = parseCsvFile_(file, 주문, c품목별, 기존키);
       신규행 = 신규행.concat(r.rows);
+      (r.주문번호 || []).forEach(function (no) { 주문번호집합[no] = true; });
       총신규 += r.rows.length;
       총중복 += r.중복;
       총오류 += r.오류;
@@ -76,7 +78,7 @@ function S2_1_주문CSV취입(입력파일, options) {
       신규행.forEach(function (row) {
         if (isBlank_(row[c출고완료])) row[c출고완료] = 0;
         row[c지시번호] = '';
-        row[c주문상태] = ENUM.주문상태.접수;
+        row[c주문상태] = ENUM.주문상태.예약;
       });
       // 최신 주문이 위로 오도록 역순 정렬 후 삽입
       신규행.reverse();
@@ -90,7 +92,8 @@ function S2_1_주문CSV취입(입력파일, options) {
  
     if (!options.silent) alert_(msg);
     writeOpLog_('S2_1_주문CSV취입', '성공', msg.replace(/\n/g, ' | '));
-    return { 파일수: csvFiles.length, 신규: 총신규, 중복: 총중복, 오류: 총오류 };
+    return { 파일수: csvFiles.length, 신규: 총신규, 중복: 총중복, 오류: 총오류,
+      주문번호: Object.keys(주문번호집합) };
   });
 }
  
@@ -123,7 +126,8 @@ function parseCsvFile_(file, 주문, c품목별, 기존키) {
     매핑.push(col_(주문, name, false));
   }
  
-  var rows = [], 중복 = 0, 오류 = 0;
+  var rows = [], 중복 = 0, 오류 = 0, 주문번호 = [];
+  var c주문번호 = col_(주문, COL.주문번호, true);
  
   for (var i = 1; i < parsed.length; i++) {
     var src = parsed[i];
@@ -135,6 +139,8 @@ function parseCsvFile_(file, 주문, c품목별, 기존키) {
     }
  
     var key = toStr_(row[c품목별]);
+    var no = toStr_(row[c주문번호]);
+    if (no && 주문번호.indexOf(no) < 0) 주문번호.push(no);
     if (!key) { 오류++; continue; }
     if (기존키[key]) { 중복++; continue; }
  
@@ -142,7 +148,7 @@ function parseCsvFile_(file, 주문, c품목별, 기존키) {
     rows.push(row);
   }
  
-  return { rows: rows, 중복: 중복, 오류: 오류, 총행: parsed.length - 1 };
+  return { rows: rows, 중복: 중복, 오류: 오류, 총행: parsed.length - 1, 주문번호: 주문번호 };
 }
  
 function getOrCreateSubFolder_(parent, name) {
