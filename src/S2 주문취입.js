@@ -174,4 +174,3 @@ function getOrCreateSubFolder_(parent, name) {
   return it.hasNext() ? it.next() : parent.createFolder(name);
 }
  
-
