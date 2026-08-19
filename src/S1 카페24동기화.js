@@ -4,7 +4,7 @@
  * ============================================================
  *  카페24에서 내려받은 재고 CSV를 상품마스터에 반영한다.
  *  통합 파이프라인에서는 헤더 검증이 끝난 단일 파일을 인자로 받는다.
- *  인자 없이 실행하는 기존 호환 모드만 파일명에서 '카페24'를 찾는다.
+ *  인자 없이 실행하면 통합 Input 파이프라인으로 연결한다.
  *  신규 상품은 등록하고, 기존 상품은 최신 정보로 갱신한다.
  *
  *  카페24 CSV 열
@@ -24,8 +24,6 @@
  */
 
 var CAFE24 = {
-  폴더파라미터: '재고CSV폴더ID',
-  파일접두어: '카페24',
   열: {
     상품코드: '상품코드',
     상품명: '상품명',
@@ -46,39 +44,10 @@ var CAFE24 = {
  * @sideEffect 상품마스터와 재고이동로그를 갱신함. 기본보관위치는 절대 덮어쓰지 않음
  */
 function S1_1_카페24재고동기화(입력파일, silent) {
+  // 운영자가 이 내부 단계를 직접 실행해도 헤더 판별을 포함한 표준 자동 흐름을 사용한다.
+  if (!입력파일) return processInput();
   return withLock_(function () {
-    // ---------- CSV 찾기 ----------
-    var 대상 = 입력파일 || null, 후보 = [];
-    if (!대상) {
-      var 폴더ID = String(param_(CAFE24.폴더파라미터, param_('CSV폴더ID', DEFAULT_FOLDER_ID)));
-      var folder;
-      try {
-        folder = DriveApp.getFolderById(폴더ID);
-      } catch (e) {
-        throw new Error('재고 CSV 폴더를 열 수 없습니다. [설정] 탭의 ' + CAFE24.폴더파라미터 + ' 확인. (' + 폴더ID + ')');
-      }
-
-      // ---------- 파일 찾기 (CSV + 변환된 구글시트 모두) ----------
-      var it = folder.getFiles();
-      while (it.hasNext()) {
-        var f = it.next();
-        var n = f.getName();
-        if (n.indexOf(CAFE24.파일접두어) < 0) continue;
-
-        var mime = f.getMimeType();
-        var csv파일 = /\.csv$/i.test(n) || mime.indexOf('csv') >= 0;
-        var 시트파일 = mime === MimeType.GOOGLE_SHEETS;
-        if (!csv파일 && !시트파일) continue;
-
-        후보.push(n + (시트파일 ? ' [구글시트]' : ' [CSV]'));
-        if (!대상 || f.getLastUpdated() > 대상.getLastUpdated()) 대상 = f;
-      }
-    }
-
-    if (!대상) {
-      throw new Error('폴더에서 "' + CAFE24.파일접두어 +
-        '"가 들어간 CSV 또는 스프레드시트를 찾지 못했습니다.\n진단_재고폴더() 로 폴더 내용을 확인하세요.');
-    }
+    var 대상 = 입력파일;
 
     // ---------- 파싱 (형식에 따라 분기) ----------
     var parsed;

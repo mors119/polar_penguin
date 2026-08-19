@@ -110,10 +110,21 @@ function 설치_2_시트정비(silent) {
       .requireValueInList(ENUM.예외사유, true)
       .setAllowInvalid(false).build());
   라인.sheet.getRange(1, c확인 + 1).setNote(
-    'O = 정상, X = 예외입니다. X 입력 시 예외사유를 선택한 뒤 상단 📦 Polar Penguin → 주문/피킹 → 결과 반영을 실행하세요.');
+    'O = 정상, X = 예외입니다. X 입력 시 예외사유를 선택하세요. 결과는 자동 반영되며 필요하면 상단 메뉴에서 즉시 반영할 수 있습니다.');
   라인.sheet.getRange(1, c예외 + 1).setNote('X인 행은 재고없음 또는 불량재고를 선택하세요.');
   라인.sheet.setColumnWidth(c확인 + 1, 80);
   라인.sheet.setColumnWidth(c예외 + 1, 120);
+  [COL.순번, COL.보관위치, COL.상품코드, COL.상품명, COL.옵션, COL.필요수량,
+   COL.실제수량, COL.담당자, COL.라인상태].forEach(function (name) {
+    var idx = col_(라인, name, false);
+    if (idx < 0) return;
+    var widths = {};
+    widths[COL.순번] = 55; widths[COL.보관위치] = 110; widths[COL.상품코드] = 130;
+    widths[COL.상품명] = 240; widths[COL.옵션] = 160; widths[COL.필요수량] = 80;
+    widths[COL.실제수량] = 80; widths[COL.담당자] = 90; widths[COL.라인상태] = 100;
+    라인.sheet.setColumnWidth(idx + 1, widths[name]);
+  });
+  라인.sheet.setFrozenRows(1);
   결과.push('피킹(라인): O/X · 예외사유 드롭다운 적용');
 
   /* ---------- 상품마스터 ---------- */
@@ -228,7 +239,7 @@ function 진단_시트구조() {
                   COL.실제수량, COL.품목별주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태]);
 
   var ss = consoleSS_();
-  ['📖 안내', '📊 대시보드', '예약대기', '주문반려', CONSOLE.설정,
+  ['📖 안내', '📊 대시보드', CONSOLE.설정,
    CONSOLE.재고이동로그, CONSOLE.작업로그, CONSOLE.입력처리로그].forEach(function (n) {
     out.push((ss.getSheetByName(n) ? '✅ ' : '❌ ') + '운영 탭: ' + n);
   });
@@ -273,16 +284,14 @@ function onOpen(e) {
   try {
     var ui = SpreadsheetApp.getUi();
     ui.createMenu('📦 Polar Penguin')
-      .addSubMenu(ui.createMenu('📥 Input 처리')
+      .addSubMenu(ui.createMenu('📥 Input')
         .addItem('Input 지금 처리', 'processInput'))
-      .addSubMenu(ui.createMenu('📦 주문/피킹')
-        .addItem('주문 확정', 'S3_1_주문확정')
-        .addItem('피킹지시 생성', 'S4_1_피킹지시생성')
-        .addItem('결과 반영', 'S5_2_수동반영')
-        .addItem('작업지시서 출력', 'S9_1_작업지시서출력'))
+      .addSubMenu(ui.createMenu('📄 작업')
+        .addItem('작업지시서 조회/재출력', 'S9_1_작업지시서출력')
+        .addItem('피킹 결과 지금 반영', 'S5_2_수동반영'))
       .addSubMenu(ui.createMenu('📊 운영')
         .addItem('대시보드 갱신', 'D0_대시보드전체갱신')
-        .addItem('예약대기 조회', '운영_예약대기조회')
+        .addItem('예약대기 현황', '운영_예약대기조회')
         .addItem('시스템 상태 확인', '진단_시트구조'))
       .addSubMenu(ui.createMenu('⚙ 관리')
         .addItem('시스템 설치/복구', 'setupSystem')
@@ -295,10 +304,6 @@ function onOpen(e) {
 }
 
 function 운영_예약대기조회() {
-  refreshOperationalViews_();
-  var ss = consoleSS_();
-  var sh = ss.getSheetByName('예약대기');
-  if (sh) ss.setActiveSheet(sh);
   return S8_2_예약대기조회();
 }
 
@@ -318,50 +323,4 @@ function 정리_로그(남길행수) {
     sh.deleteRows(남길행수 + 2, 지울행);
     Logger.log(name + ': ' + 지울행 + '행 삭제 (남은 ' + sh.getLastRow() + '행)');
   });
-}
-
-
-
-/** 호환 함수명을 유지하며 통합 Input의 파일별 판별 결과를 보여준다. */
-function 진단_주문폴더() {
-  var raw = param_('통합Input폴더ID', param_('CSV폴더ID', DEFAULT_FOLDER_ID));
-  var m = String(raw).match(/[-\w]{25,}/);
-  var 폴더ID = m ? m[0] : String(raw);
-
-  var out = ['설정값: ' + raw, '추출 ID: ' + 폴더ID];
-
-  var folder;
-  try {
-    folder = DriveApp.getFolderById(폴더ID);
-    out.push('폴더명: ' + folder.getName());
-  } catch (e) {
-    out.push('❌ 폴더를 열 수 없음: ' + e.message);
-    Logger.log(out.join('\n'));
-    return;
-  }
-
-  out.push('');
-  var it = folder.getFiles(), n = 0;
-  while (it.hasNext()) {
-    var f = it.next();
-    var name = f.getName();
-    var mime = f.getMimeType();
-    var 타입 = mime.indexOf('spreadsheet') >= 0 ? '구글시트'
-             : mime.indexOf('csv') >= 0 ? 'CSV'
-             : mime.indexOf('excel') >= 0 ? '엑셀' : mime;
-    var 판별 = INPUT_TYPE.UNKNOWN;
-    var 오류 = '';
-    try { 판별 = detectInputType_(readUnifiedInput_(f)[0] || []); }
-    catch (e2) { 오류 = e2.inputCode || e2.message; }
-
-    out.push((판별 !== INPUT_TYPE.UNKNOWN && !오류 ? '✅ ' : '❌ ') + name);
-    out.push('     ' + 타입 + '  |  판별: ' + 판별 + (오류 ? '  |  오류: ' + 오류 : ''));
-    n++;
-  }
-
-  if (!n) out.push('(폴더가 비어 있습니다)');
-  out.push('');
-  out.push('※ processInput()과 동일하게 Input 직하위 파일만 검사합니다.');
-
-  Logger.log(out.join('\n'));
 }

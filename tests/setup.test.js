@@ -85,6 +85,7 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   class FakeSheet {
     constructor(name, parent) {
       this.name = name; this.parent = parent; this.cells = new Map(); this.maxRows = 1000; this.maxCols = 26;
+      this.hidden = false;
     }
     key(row, col) { return `${row}:${col}`; }
     value(row, col) { return this.cells.get(this.key(row, col)) ?? ''; }
@@ -97,6 +98,15 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     getMaxRows() { return this.maxRows; }
     getMaxColumns() { return this.maxCols; }
     insertColumnsAfter(after, count) { this.maxCols = Math.max(this.maxCols, after + count); }
+    deleteRow(row) {
+      const next = new Map();
+      for (const [key, value] of this.cells) {
+        const [r, c] = key.split(':').map(Number);
+        if (r < row) next.set(key, value);
+        if (r > row) next.set(`${r - 1}:${c}`, value);
+      }
+      this.cells = next;
+    }
     getRange(row, col, rows, cols) { return new FakeRange(this, row, col, rows || 1, cols || 1); }
     getDataRange() { return this.getRange(1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); }
     clearContents() { this.cells.clear(); return this; }
@@ -105,6 +115,7 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     autoResizeColumns() { return this; }
     setColumnWidth() { return this; }
     setHiddenGridlines() { return this; }
+    hideSheet() { this.hidden = true; return this; }
   }
 
   class FakeSpreadsheet {
@@ -177,7 +188,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   context.PropertiesService = { getScriptProperties: () => ({
     getProperty: (key) => properties.get(key) || null,
     setProperty: (key, value) => properties.set(key, value),
-    setProperties: (values) => Object.entries(values).forEach(([key, value]) => properties.set(key, value))
+    setProperties: (values) => Object.entries(values).forEach(([key, value]) => properties.set(key, value)),
+    deleteProperty: (key) => properties.delete(key)
   }) };
   context.LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) };
   context.ScriptApp = {
@@ -198,18 +210,30 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
 
   const first = context.setupSystem();
   assert.equal(properties.get('ROOT_FOLDER_ID'), root.getId());
-  assert.equal(first.folders.filter((item) => item.created).length, 5);
+  assert.equal(first.folders.filter((item) => item.created).length, 4);
   assert.deepEqual(plain(first.folders.map((item) => item.name)),
-    ['Input', 'Processed', 'Error', 'Output', 'Backup']);
+    ['Input', 'Success', 'Error', 'Output']);
   assert.equal(first.spreadsheets.filter((item) => item.created).length, 1);
   assert.equal(spreadsheets.size, 1, 'regression: setup must never create five operational spreadsheets');
+  assert.deepEqual(
+    [...root.folders.map((folder) => folder.name), ...root.files.map((file) => file.name)].sort(),
+    ['Error', 'Input', 'Output', 'Polar Penguin', 'Success'].sort()
+  );
   assert.deepEqual(triggers.map((trigger) => trigger.getHandlerFunction()).sort(), ['onOpen', 'processInput', 'syncAndRefresh']);
 
   const operationSs = spreadsheets.get(properties.get('OPERATION_SPREADSHEET_ID'));
   assert.equal(properties.get('CONSOLE_SS_ID'), operationSs.getId());
-  const expectedTabs = ['📖 안내', '📊 대시보드', '상품마스터', '주문(완료)', '피킹(헤더)',
-    '피킹(라인)', '예약대기', '주문반려', '재고이동로그', '작업로그', '입력처리로그', '설정'];
+  const expectedTabs = ['📖 안내', '📊 대시보드', '상품마스터', '주문(완료)', '피킹(라인)',
+    '피킹(헤더)', '재고이동로그', '작업로그', '입력처리로그', '설정'];
+  assert.deepEqual(operationSs.getSheets().map((sheet) => sheet.getName()), expectedTabs);
   assert.deepEqual(operationSs.getSheets().map((sheet) => sheet.getName()).sort(), expectedTabs.slice().sort());
+  assert.equal(operationSs.getSheetByName('Sheet1'), null);
+  assert.equal(operationSs.getSheetByName('시트1'), null);
+  assert.equal(operationSs.getSheetByName('예약대기'), null);
+  assert.equal(operationSs.getSheetByName('주문반려'), null);
+  for (const name of ['피킹(헤더)', '재고이동로그', '작업로그', '입력처리로그', '설정']) {
+    assert.equal(operationSs.getSheetByName(name).hidden, true, `${name} should be hidden`);
+  }
   assert.ok(validationLists.some((values) => values.join(',') === 'O,X'));
   assert.ok(validationLists.some((values) => values.join(',') === '재고없음,불량재고'));
   assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input 파일 업로드/);
@@ -217,13 +241,20 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   const configSheet = operationSs.getSheetByName('설정');
   const configValues = configSheet.getDataRange().getValues();
   const inputId = properties.get('FOLDER_ID_INPUT');
-  for (const key of ['통합Input폴더ID', 'CSV폴더ID', '재고CSV폴더ID']) {
+  for (const key of ['통합Input폴더ID']) {
     const row = configValues.find((value) => value[0] === '파라미터' && value[1] === key);
     assert.equal(row[2], inputId);
   }
+  assert.equal(configValues.some((row) => row[1] === 'Processed폴더ID'), false);
+  assert.equal(configValues.some((row) => row[1] === 'Backup폴더ID'), false);
+  assert.equal(properties.has('FOLDER_ID_PROCESSED'), false);
+  assert.equal(properties.has('FOLDER_ID_BACKUP'), false);
   assert.ok(operationSs.getSheetByName('입력처리로그'));
   const pollingRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '폴링주기(분)') + 1;
   configSheet.getRange(pollingRow, 3).setValue(15);
+  configSheet.getRange(configSheet.getLastRow() + 1, 1, 1, 4)
+    .setValues([['파라미터', 'Processed폴더ID', 'legacy-folder', 'legacy']]);
+  properties.set('FOLDER_ID_PROCESSED', 'legacy-folder');
 
   const orderSheet = operationSs.getSheetByName('주문(완료)');
   const orderHeaders = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
@@ -240,6 +271,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.equal(second.spreadsheets.filter((item) => item.created).length, 0);
   assert.equal(spreadsheets.size, 1);
   assert.equal(configSheet.getRange(pollingRow, 3).getValue(), 15);
+  assert.equal(configSheet.getDataRange().getValues().some((row) => row[1] === 'Processed폴더ID'), false);
+  assert.equal(properties.has('FOLDER_ID_PROCESSED'), false);
   assert.equal(orderSheet.getRange(2, 1).getValue(), 'ORDER-KEEP');
   assert.equal(operationSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
   assert.equal(triggers.length, 3);
@@ -259,4 +292,14 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     assert.equal(context.openSS_(role).getId(), operationSs.getId());
     assert.equal(context.getSheet_(role).getParent().getId(), operationSs.getId());
   }
+});
+
+test('only an empty generated Sheet1 or 시트1 is safe to reuse', () => {
+  const fake = (name, rows, columns) => ({
+    getName: () => name, getLastRow: () => rows, getLastColumn: () => columns
+  });
+  assert.equal(context.isEmptyDefaultSheet_(fake('Sheet1', 0, 0)), true);
+  assert.equal(context.isEmptyDefaultSheet_(fake('시트1', 0, 0)), true);
+  assert.equal(context.isEmptyDefaultSheet_(fake('Sheet1', 1, 1)), false);
+  assert.equal(context.isEmptyDefaultSheet_(fake('사용자메모', 0, 0)), false);
 });

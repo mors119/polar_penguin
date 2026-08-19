@@ -431,28 +431,6 @@ var DASHCOLOR = {
   선: 'BFC9D4'
 };
 
-/** 더 이상 사용하지 않는 레거시 탭을 제거하고 작업로그를 500건으로 줄인다. */
-function 정리_불필요탭() {
-  var ss = consoleSS_();
-  var out = [];
-
-  ['입고', '대시보드', '📊 주문현황', '📊 재고현황', '📊 피킹현황'].forEach(function (name) {
-    var sh = ss.getSheetByName(name);
-    if (!sh) { out.push('· ' + name + ' — 이미 없음'); return; }
-    ss.deleteSheet(sh);
-    out.push('✅ ' + name + ' 탭 삭제');
-  });
-
-  // 작업로그를 최근 500행만 남긴다 (최신이 위)
-  var log = ss.getSheetByName(CONSOLE.작업로그);
-  if (log && log.getLastRow() > 501) {
-    var 지울행 = log.getLastRow() - 501;
-    log.deleteRows(502, 지울행);
-    out.push('✅ 작업로그 ' + 지울행 + '행 삭제 → ' + log.getLastRow() + '행');
-  }
-
-  var msg;
-}
 /** onOpen 트리거만 제거 — 시트가 안 열릴 때 응급조치 */
 function 응급_onOpen트리거제거() {
   var 제거 = 0;

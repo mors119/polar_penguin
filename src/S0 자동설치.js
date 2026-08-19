@@ -46,12 +46,12 @@ function setupSystem() {
       var root = setupStep_('ROOT folder 확인', function () { return resolveRootFolder_(); });
       report.root = { id: root.getId(), name: root.getName() };
 
-      var folders = setupStep_('Drive 폴더 구성', function () {
-        return ensureProjectFolders_(root, report);
-      });
-
       var operationResource = setupStep_('운영 Spreadsheet 구성', function () {
         return ensureOperationSpreadsheet_(root, root.getId(), report);
+      });
+
+      var folders = setupStep_('Drive 폴더 구성', function () {
+        return ensureProjectFolders_(root, report);
       });
 
       persistOperation_(operationResource.ss, root.getId(), folders);
@@ -83,6 +83,9 @@ function setupSystem() {
       });
       if (String(dashboardResult).indexOf('❌') >= 0) report.warnings.push(dashboardResult);
       else report.configuration.push('Dashboard refreshed');
+
+      setupStep_('내부 탭 숨김', function () { hideInternalSheets_(operationResource.ss); });
+      report.configuration.push('Internal sheets hidden');
 
       PropertiesService.getScriptProperties().setProperty(INSTALL_ROOT_MARKER_PROPERTY, root.getId());
       var message = buildSetupReport_(report);
@@ -123,10 +126,9 @@ function resolveRootFolder_() {
 function ensureProjectFolders_(root, report) {
   var folders = {};
   folders.input = ensureChildFolder_(root, 'Input', 'Input', report);
-  folders.processed = ensureChildFolder_(root, 'Processed', 'Processed', report);
+  folders.success = ensureChildFolder_(root, 'Success', 'Success', report);
   folders.error = ensureChildFolder_(root, 'Error', 'Error', report);
   folders.output = ensureChildFolder_(root, 'Output', 'Output', report);
-  folders.backup = ensureChildFolder_(root, 'Backup', 'Backup', report);
   return folders;
 }
 
@@ -161,15 +163,15 @@ function installResourceDefinitions_() {
         COL.취소일시, COL.확정일시, COL.대기사유]
     },
     {
-      role: ROLE.헤더, sheetName: '피킹(헤더)',
-      headers: [COL.피킹지시번호, COL.주문번호, COL.카트슬롯, COL.품목수,
-        COL.총수량, COL.피킹담당자, COL.상태, COL.출력일시]
-    },
-    {
       role: ROLE.라인, sheetName: '피킹(라인)',
       headers: [COL.순번, COL.보관위치, COL.상품코드, COL.이미지, COL.상품명,
         COL.옵션, COL.필요수량, COL.확인, COL.실제수량, COL.예외사유,
         COL.품목별주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태, COL.처리일시]
+    },
+    {
+      role: ROLE.헤더, sheetName: '피킹(헤더)',
+      headers: [COL.피킹지시번호, COL.주문번호, COL.카트슬롯, COL.품목수,
+        COL.총수량, COL.피킹담당자, COL.상태, COL.출력일시]
     }
   ];
 }
@@ -199,18 +201,24 @@ function ensureOperationSpreadsheet_(root, rootId, report) {
 }
 
 function persistOperation_(ss, rootId, folders) {
+  var properties = PropertiesService.getScriptProperties();
   var values = {
     ROOT_FOLDER_ID: rootId,
     OPERATION_SPREADSHEET_ID: ss.getId(),
     CONSOLE_SS_ID: ss.getId(),
     POLAR_PENGUIN_ROOT_FOLDER_ID: rootId,
     FOLDER_ID_INPUT: folders.input.getId(),
-    FOLDER_ID_PROCESSED: folders.processed.getId(),
+    FOLDER_ID_SUCCESS: folders.success.getId(),
     FOLDER_ID_ERROR: folders.error.getId(),
-    FOLDER_ID_OUTPUT: folders.output.getId(),
-    FOLDER_ID_BACKUP: folders.backup.getId()
+    FOLDER_ID_OUTPUT: folders.output.getId()
   };
-  PropertiesService.getScriptProperties().setProperties(values, false);
+  properties.setProperties(values, false);
+  // 이전 버전의 저장 위치 키만 정리하며 실제 레거시 폴더나 파일은 삭제하지 않는다.
+  if (typeof properties.deleteProperty === 'function') {
+    ['FOLDER_ID_PROCESSED', 'FOLDER_ID_BACKUP'].forEach(function (key) {
+      properties.deleteProperty(key);
+    });
+  }
   _cache.consoleSS = ss;
   _cache.config = null;
   _cache.ss = {};
@@ -223,15 +231,13 @@ function ensureOperationalSheets_(ss) {
   installResourceDefinitions_().forEach(function (def) {
     resources[def.role] = { ss: ss, sheet: ensureInstallSheet_(ss, def.sheetName, def.headers) };
   });
-  ensureInstallSheet_(ss, '예약대기', [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.대기사유]);
-  ensureInstallSheet_(ss, '주문반려', [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.상품명, COL.수량, COL.취소사유, COL.취소일시]);
-  ensureInstallSheet_(ss, CONSOLE.설정, ['구분', '키', '값', '비고']);
   ensureInstallSheet_(ss, CONSOLE.재고이동로그, [
     '시각', '구분', COL.피킹지시번호, COL.주문번호, COL.품목별주문번호,
     COL.상품코드, '변동량', '변동 후 재고', COL.담당자, '사유'
   ]);
   ensureInstallSheet_(ss, CONSOLE.작업로그, ['시각', '함수', '결과', '메시지', '실행계정']);
   ensureInstallSheet_(ss, CONSOLE.입력처리로그, INPUT_LOG_HEADERS);
+  ensureInstallSheet_(ss, CONSOLE.설정, ['구분', '키', '값', '비고']);
   return resources;
 }
 
@@ -271,8 +277,7 @@ function ensureInstallSheet_(ss, name, headers) {
   var sheet = ss.getSheetByName(name);
   if (!sheet) {
     var sheets = ss.getSheets();
-    if (sheets.length === 1 && sheets[0].getName() === 'Sheet1' &&
-        sheets[0].getLastRow() === 0 && sheets[0].getLastColumn() === 0) {
+    if (sheets.length === 1 && isEmptyDefaultSheet_(sheets[0])) {
       sheet = sheets[0].setName(name);
     } else {
       sheet = ss.insertSheet(name);
@@ -299,6 +304,28 @@ function ensureInstallSheet_(ss, name, headers) {
   return sheet;
 }
 
+/** Google이 자동 생성한 빈 기본 탭만 안전하게 표준 첫 탭으로 재사용한다. */
+function isEmptyDefaultSheet_(sheet) {
+  if (!sheet || ['Sheet1', '시트1'].indexOf(sheet.getName()) < 0) return false;
+  return sheet.getLastRow() === 0 && sheet.getLastColumn() === 0;
+}
+
+/** 운영자 화면에서는 업무 탭만 보이고 시스템 탭은 필요할 때 직접 펼쳐 확인한다. */
+function hideInternalSheets_(ss) {
+  var guide = ss.getSheetByName('📖 안내');
+  try {
+    if (guide && typeof ss.setActiveSheet === 'function') ss.setActiveSheet(guide);
+  } catch (ignore) { }
+  [
+    '피킹(헤더)', CONSOLE.재고이동로그, CONSOLE.작업로그,
+    CONSOLE.입력처리로그, CONSOLE.설정
+  ].forEach(function (name) {
+    var sheet = ss.getSheetByName(name);
+    if (!sheet) return;
+    try { sheet.hideSheet(); } catch (e) { /* 숨김을 지원하지 않는 환경에서는 그대로 둔다. */ }
+  });
+}
+
 /** 안내 탭은 시스템이 관리하는 설명 영역이며 setup 재실행 때 현재 구조로 다시 그린다. */
 function renderGuideSheet_(ss, folders) {
   var sh = ensureInstallSheet_(ss, '📖 안내', []);
@@ -313,27 +340,18 @@ function renderGuideSheet_(ss, folders) {
   ).setWrap(true).setBackground(DASHCOLOR.카드).setFontWeight('bold');
 
   var rows = [
-    ['폴더', '용도'],
-    ['Input', '주문·재고 파일을 함께 올리는 유일한 입력 폴더'],
-    ['Processed', '정상 처리된 원본이 날짜별로 이동'],
-    ['Error', '검증/처리 실패 원본이 날짜별로 이동'],
-    ['Output', 'Output/YYYY-MM-DD/<피킹지시번호>.pdf'],
-    ['Backup', '보관 및 향후 백업용'],
+    ['1. 파일 넣기', '주문 또는 재고 파일을 Drive의 Input 폴더에 업로드합니다. 파일 종류를 구분할 필요가 없습니다.'],
+    ['2. 자동 처리', '시스템이 유형 판별, 검증, 재고/주문 처리, 주문 확정, 피킹 생성, PDF 생성, Success 이동을 자동 실행합니다.'],
+    ['3. 피킹', 'Output/YYYY-MM-DD 안의 PDF를 보고 피킹합니다.'],
+    ['4. 결과 입력', '피킹(라인)에 O=정상, X=예외를 입력합니다. X이면 예외사유를 선택하며 주문 전체 취소 규칙이 적용됩니다.'],
+    ['5. 결과 자동 반영', 'Trigger가 O/X 결과를 자동으로 재고와 주문 상태에 반영하고 대시보드를 갱신합니다.'],
+    ['6. 오류', '실패 파일은 Error/YYYY-MM-DD로 이동하며 입력 로그, 작업 로그, Gmail 알림에 기록됩니다.'],
     ['', ''],
-    ['핵심 용어', '설명'],
-    ['주문상태', '접수 → 확정 또는 예약대기/취소 → 출고완료'],
-    ['가용재고', '새 주문에 배정할 수 있는 수량'],
-    ['예약재고', '확정 주문에 확보되어 출고를 기다리는 수량'],
-    ['예약상품', 'Y인 동안 주문 전체를 예약대기로 유지'],
-    ['O / X', 'O=정상 피킹, X=예외. X이면 예외사유를 선택하고 주문 전체 취소 규칙 적용'],
-    ['대시보드', '주문·재고·피킹·예약·운영 현황과 권고를 한 화면에서 확인'],
-    ['', ''],
-    ['운영 방법', '상단 「📦 Polar Penguin」 메뉴에서 Input 처리, 주문 확정, 피킹지시 생성, 결과 반영, 작업지시서 출력, 대시보드 갱신을 실행하세요.']
+    ['폴더', 'Input=입력 · Success=성공 원본 · Error=실패 원본 · Output=피킹 PDF'],
+    ['긴급 작업', '상단 「📦 Polar Penguin」 메뉴에서 Input 즉시 처리 또는 피킹 결과 즉시 반영을 실행할 수 있습니다.']
   ];
   sh.getRange(5, 1, rows.length, 2).setValues(rows).setWrap(true);
   sh.getRange(5, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
-  sh.getRange(12, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
-  sh.getRange(20, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
   sh.setColumnWidth(1, 150);
   sh.setColumnWidth(2, 620);
   sh.setFrozenRows(1);
@@ -385,6 +403,7 @@ function readSetupConfig_(sheet) {
 
 function ensureSetupConfig_(consoleSs, folders, resources, report) {
   var sheet = consoleSs.getSheetByName(CONSOLE.설정);
+  removeLegacySetupConfig_(sheet);
   var managed = [];
   installResourceDefinitions_().forEach(function (def) {
     managed.push(['파일ID', def.role, resources[def.role].ss.getId(), '단일 운영 Spreadsheet',
@@ -396,20 +415,15 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
     return function (value) { return extractDriveId_(value) === folder.getId() && validFolderId_(value); };
   };
   managed.push(['파라미터', '통합Input폴더ID', folders.input.getId(), '유일한 입력 폴더', exactFolder(folders.input)]);
-  managed.push(['파라미터', 'Processed폴더ID', folders.processed.getId(), '정상 처리 원본', exactFolder(folders.processed)]);
+  managed.push(['파라미터', 'Success폴더ID', folders.success.getId(), '정상 처리 원본', exactFolder(folders.success)]);
   managed.push(['파라미터', 'Error폴더ID', folders.error.getId(), '처리 실패 원본', exactFolder(folders.error)]);
   managed.push(['파라미터', 'Output폴더ID', folders.output.getId(), '피킹 PDF 출력', exactFolder(folders.output)]);
-  managed.push(['파라미터', 'Backup폴더ID', folders.backup.getId(), '백업 폴더', exactFolder(folders.backup)]);
-  // 기존 S1/S2 수동 진입점도 통합 Input을 보도록 호환 키를 유지한다.
-  managed.push(['파라미터', 'CSV폴더ID', folders.input.getId(), '통합 Input (호환)', exactFolder(folders.input)]);
-  managed.push(['파라미터', '재고CSV폴더ID', folders.input.getId(), '통합 Input (호환)', exactFolder(folders.input)]);
 
   var defaults = [
-    ['파라미터', 'CSV처리완료폴더명', '처리완료', '기존 S2 단독 실행용 호환 설정'],
     ['파라미터', '폴링주기(분)', 5, '변경 후 setupSystem 재실행'],
     ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
     ['파라미터', '예약키워드', '예약', '상품명 예약 판정 문자열 (쉼표 구분)'],
-    ['파라미터', '재고경고임계치', 3, '재고현황 대시보드 경고 기준'],
+    ['파라미터', '재고경고임계치', 3, '통합 대시보드 재고 경고 기준'],
     ['파라미터', '추가투입임계(분)', 45, '주문 추가 투입 권고 기준'],
     ['파라미터', '알림이메일', '', '입력 처리 실패 알림 수신자']
   ];
@@ -426,6 +440,24 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   _cache.ss = {};
   report.configuration.push('Single operational Spreadsheet registered');
   report.configuration.push('Folder IDs registered');
+}
+
+/** 더 이상 읽지 않는 다중 입력/Processed/Backup 설정 행만 제거한다. */
+function removeLegacySetupConfig_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+  var legacy = {
+    Processed폴더ID: true, Backup폴더ID: true, CSV폴더ID: true,
+    재고CSV폴더ID: true, CSV처리완료폴더명: true
+  };
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  var removed = 0;
+  for (var i = values.length - 1; i >= 0; i--) {
+    if (String(values[i][0] || '').trim() === '파라미터' && legacy[String(values[i][1] || '').trim()]) {
+      sheet.deleteRow(i + 2);
+      removed++;
+    }
+  }
+  return removed;
 }
 
 function mergeSetupConfig_(values, managed, defaults) {

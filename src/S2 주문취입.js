@@ -5,7 +5,7 @@
  * ============================================================
  *  주문 CSV/Google Spreadsheet를 읽어 주문(완료) 시트에 적재한다.
  *  통합 파이프라인은 헤더 검증이 끝난 단일 파일을 넘기고 원본 이동을 직접 관리한다.
- *  인자 없이 실행하는 기존 호환 모드에서만 CSV폴더ID를 스캔한다.
+ *  인자 없이 실행하면 통합 Input 파이프라인으로 연결한다.
  *
  *   · 품목별 주문번호 기준으로 중복을 제거한다
  *     (같은 파일을 두 번 올려도 중복 적재되지 않는다)
@@ -26,44 +26,16 @@ var TEXT_COLUMNS_ORDER = [
  
 /**
  * @param {GoogleAppsScript.Drive.File=} 입력파일 processInput이 판별한 단일 파일
- * @param {{skipMove:Boolean=, silent:Boolean=}=} options 파이프라인의 이동/알림 제어
+ * @param {{silent:Boolean=}=} options 파이프라인의 알림 제어
  * @return {Object} 처리한 파일 수와 신규/중복/오류 행 수
- * @sideEffect 신규 주문을 접수 상태로 적재. skipMove가 아니면 기존 완료 폴더로 원본을 이동
+ * @sideEffect 신규 주문을 접수 상태로 적재. 원본 이동은 통합 Input 파이프라인이 담당
  */
 function S2_1_주문CSV취입(입력파일, options) {
+  // 운영자가 이 내부 단계를 직접 실행해도 별도 폴더를 만들지 않고 표준 자동 흐름을 사용한다.
+  if (!입력파일) return processInput();
   return withLock_(function () {
     options = options || {};
-    var 폴더ID = String(param_('CSV폴더ID', DEFAULT_FOLDER_ID));
-    var 완료폴더명 = String(param_('CSV처리완료폴더명', '처리완료'));
- 
-    var folder;
-    try {
-      folder = DriveApp.getFolderById(폴더ID);
-    } catch (e) {
-      throw new Error('CSV 폴더를 열 수 없습니다. [설정] 탭의 CSV폴더ID를 확인하세요. (' + 폴더ID + ')');
-    }
- 
-    // ---------- 호환 모드의 CSV 수집 (카페24 재고 파일은 제외) ----------
-    var csvFiles = 입력파일 ? [입력파일] : [];
-    if (!입력파일) {
-      var it = folder.getFiles();
-      while (it.hasNext()) {
-        var f = it.next();
-        var n = f.getName();
-        if (n.indexOf(CAFE24.파일접두어) >= 0) continue;   // 재고 파일 제외
-
-        var mime = f.getMimeType();
-        var csv파일 = /\.csv$/i.test(n) || mime.indexOf('csv') >= 0;
-        var 시트파일 = mime === MimeType.GOOGLE_SHEETS;
-        if (!csv파일 && !시트파일) continue;
-
-        csvFiles.push(f);
-      }
-    }
-    if (!csvFiles.length) {
-      alert_('폴더에 처리할 주문 CSV가 없습니다.\n(카페24 재고 CSV는 S1에서 처리합니다)');
-      return { 파일수: 0 };
-    }
+    var csvFiles = [입력파일];
 
     // 카페24 주문 export의 모든 열을 먼저 보충한다. 내부 운영 열만 남기고
     // 원본 필드를 버리는 회귀를 막으며, 기존 열과 데이터는 이동하거나 지우지 않는다.
@@ -111,23 +83,10 @@ function S2_1_주문CSV취입(입력파일, options) {
       prependRows_(주문.sheet, 신규행, 텍스트열);
     }
  
-    // ---------- 호환 모드의 원본 이동 ----------
-    if (!options.skipMove) {
-      var 완료폴더 = getOrCreateSubFolder_(folder, 완료폴더명);
-      csvFiles.forEach(function (file) {
-        try {
-          완료폴더.addFile(file);
-          folder.removeFile(file);
-        } catch (e) {
-          리포트.push('⚠ ' + file.getName() + ' 이동 실패: ' + e.message);
-        }
-      });
-    }
- 
     var msg = 'CSV 취입 완료\n\n' + 리포트.join('\n') +
       '\n\n합계 — 신규 ' + 총신규 + '건 / 중복 제외 ' + 총중복 + '건' +
       (총오류 ? ' / 오류 ' + 총오류 + '건' : '') +
-      '\n\n다음: 「S3. 주문 확정」으로 재고를 검증하세요.';
+      '\n\n통합 Input 파이프라인이 이어서 재고 검증·확정·피킹 생성을 자동 수행합니다.';
  
     if (!options.silent) alert_(msg);
     writeOpLog_('S2_1_주문CSV취입', '성공', msg.replace(/\n/g, ' | '));

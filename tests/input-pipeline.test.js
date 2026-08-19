@@ -72,9 +72,10 @@ test('inventory flow synchronizes stock then re-evaluates reserved orders before
   const calls = [];
   context.S1_1_카페24재고동기화 = () => { calls.push('S1'); return { 신규: 1 }; };
   context.S3_1_주문확정 = () => { calls.push('S3'); return { 확정: 1 }; };
-  context.S4_1_피킹지시생성 = () => { calls.push('S4'); return { 생성: false }; };
+  context.S4_1_피킹지시생성 = () => { calls.push('S4'); return { 생성: true, 지시번호: 'PK-2' }; };
+  context.S9_피킹PDF생성 = () => { calls.push('S9'); return { 생성: true }; };
   context.runInputBusiness_('INVENTORY', {}, {});
-  assert.deepEqual(calls, ['S1', 'S3', 'S4']);
+  assert.deepEqual(calls, ['S1', 'S3', 'S4', 'S9']);
 });
 
 test('unsupported and corrupt files receive stable validation error codes', () => {
