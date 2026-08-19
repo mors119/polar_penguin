@@ -12,7 +12,7 @@
  */
 
 /** 설정·로그 탭이 있는 스프레드시트 ID */
-var CONSOLE_SS_ID = '1PwHJOkP-xRe7rDaZMeicRhg-BKviCYhLytJG_zpBLO8';
+var CONSOLE_SS_ID = '';
 
 var CONSOLE = {
   설정: '설정',
@@ -97,10 +97,18 @@ function consoleSS_() {
   if (_cache.consoleSS) return _cache.consoleSS;
 
   var ss = null;
-  try { ss = SpreadsheetApp.getActiveSpreadsheet(); } catch (e) { ss = null; }
+  var propertyId = PropertiesService.getScriptProperties().getProperty('CONSOLE_SS_ID');
+  if (propertyId) {
+    try { ss = SpreadsheetApp.openById(propertyId); }
+    catch (e) { throw new Error('Script Property의 CONSOLE_SS_ID 파일을 열 수 없습니다. (' + propertyId + ')'); }
+  }
 
   if (!ss) {
-    var id = PropertiesService.getScriptProperties().getProperty('CONSOLE_SS_ID') || CONSOLE_SS_ID;
+    try { ss = SpreadsheetApp.getActiveSpreadsheet(); } catch (e2) { ss = null; }
+  }
+
+  if (!ss) {
+    var id = CONSOLE_SS_ID;
     if (!id) {
       throw new Error('설정·로그를 둘 스프레드시트가 지정되지 않았습니다.\n' +
         'CONSOLE_SS_ID 를 입력한 뒤 설정_콘솔파일지정() 을 실행하세요.');

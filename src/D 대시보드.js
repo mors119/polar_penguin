@@ -748,7 +748,7 @@ function collectPickingStatus_() {
  *  메뉴용 일괄 갱신
  * ============================================================ */
 
-function D0_대시보드전체갱신() {
+function D0_대시보드전체갱신(silent) {
   var 결과 = [];
   try { D1_주문현황갱신(); 결과.push('✅ 주문현황'); }
   catch (e) { 결과.push('❌ 주문현황: ' + e.message); }
@@ -757,6 +757,6 @@ function D0_대시보드전체갱신() {
   try { D3_피킹현황갱신(); 결과.push('✅ 피킹현황'); }
   catch (e) { 결과.push('❌ 피킹현황: ' + e.message); }
 
-  alert_('대시보드 갱신\n\n' + 결과.join('\n'));
+  if (!silent) alert_('대시보드 갱신\n\n' + 결과.join('\n'));
   return 결과.join(' / ');
 }
