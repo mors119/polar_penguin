@@ -2,9 +2,9 @@
  * ============================================================
  *  ROOT_FOLDER 기반 자동 설치
  * ============================================================
- *  외부 공개 함수
- *    setRootFolder(urlOrId)
- *    setupSystem()
+ *  ROOT 폴더 하나를 기준으로 Drive 폴더, Console/업무 Spreadsheet,
+ *  표준 시트·헤더·설정, validation, trigger, 대시보드를 구성한다.
+ *  모든 ensure 단계는 재실행을 전제로 하며 기존 데이터를 초기화하지 않는다.
  * ============================================================
  */
 
@@ -12,6 +12,12 @@ var ROOT_FOLDER_PROPERTY = 'ROOT_FOLDER_ID';
 var ROOT_FOLDER_URL_PROPERTY = 'ROOT_FOLDER_URL';
 var INSTALL_ROOT_MARKER_PROPERTY = 'POLAR_PENGUIN_ROOT_FOLDER_ID';
 
+/**
+ * 설치 기준이 될 Google Drive 폴더를 검증하고 Script Property에 저장한다.
+ * @param {String} urlOrId Drive 폴더 URL 또는 ID
+ * @return {String} 저장된 폴더명과 ID를 포함한 확인 메시지
+ * @throws {Error} ID를 추출할 수 없거나 폴더 접근 권한이 없을 때
+ */
 function setRootFolder(urlOrId) {
   var id = extractDriveId_(urlOrId);
   if (!id) throw new Error('Google Drive 폴더 URL 또는 ID에서 폴더 ID를 찾지 못했습니다.');
@@ -26,6 +32,12 @@ function setRootFolder(urlOrId) {
   return msg;
 }
 
+/**
+ * 신규 설치와 부분 복구를 같은 순서로 수행하는 공식 설치 진입점.
+ * 기존 리소스는 재사용하고, 누락된 폴더·파일·시트·헤더·설정만 보충한다.
+ * @return {Object} 생성/재사용 리소스, 구성 결과, 경고를 담은 설치 보고서
+ * @throws {Error} 단계명이 포함된 오류. 이미 완료된 이전 단계는 삭제하지 않음
+ */
 function setupSystem() {
   return withLock_(function () {
     var report = { root: null, folders: [], spreadsheets: [], configuration: [], warnings: [] };
@@ -122,6 +134,7 @@ function ensureProjectFolders_(root, report) {
 }
 
 function ensureChildFolder_(parent, name, label, report) {
+  // 같은 이름의 직접 하위 폴더가 있으면 재사용해 setup 재실행 시 중복 생성을 막는다.
   var iterator = parent.getFoldersByName(name);
   var folder;
   var created = false;
@@ -279,6 +292,7 @@ function ensureInstallSheet_(ss, name, headers) {
 
   var current = sheet.getLastColumn() > 0
     ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
+  // 데이터가 있는 시트는 별칭도 기존 컬럼으로 인정해 중복 컬럼을 만들지 않는다.
   var missing = missingInstallHeaders_(current, headers, sheet.getLastRow() > 1);
   if (missing.length) {
     var start = lastInstallHeaderColumn_(current) + 1;
@@ -384,6 +398,8 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
 }
 
 function mergeSetupConfig_(values, managed, defaults) {
+  // managed 값은 없거나 유효하지 않을 때만 복구하고, defaults는 키가 없을 때만 추가한다.
+  // 따라서 폴링 주기 같은 사용자 설정값은 setup 재실행으로 덮어쓰지 않는다.
   var index = {};
   (values || []).forEach(function (row, offset) {
     var section = String(row[0] || '').trim();

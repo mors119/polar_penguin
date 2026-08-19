@@ -27,6 +27,8 @@ var TEXT_COLUMNS_ORDER = [
 /**
  * @param {GoogleAppsScript.Drive.File=} 입력파일 processInput이 판별한 단일 파일
  * @param {{skipMove:Boolean=, silent:Boolean=}=} options 파이프라인의 이동/알림 제어
+ * @return {Object} 처리한 파일 수와 신규/중복/오류 행 수
+ * @sideEffect 신규 주문을 접수 상태로 적재. skipMove가 아니면 기존 완료 폴더로 원본을 이동
  */
 function S2_1_주문CSV취입(입력파일, options) {
   return withLock_(function () {
@@ -41,7 +43,7 @@ function S2_1_주문CSV취입(입력파일, options) {
       throw new Error('CSV 폴더를 열 수 없습니다. [설정] 탭의 CSV폴더ID를 확인하세요. (' + 폴더ID + ')');
     }
  
-    // ---------- CSV 수집 (카페24 재고 파일은 제외) ----------
+    // ---------- 호환 모드의 CSV 수집 (카페24 재고 파일은 제외) ----------
     var csvFiles = 입력파일 ? [입력파일] : [];
     if (!입력파일) {
       var it = folder.getFiles();
@@ -105,7 +107,7 @@ function S2_1_주문CSV취입(입력파일, options) {
       prependRows_(주문.sheet, 신규행, 텍스트열);
     }
  
-    // ---------- 처리한 CSV 이동 ----------
+    // ---------- 호환 모드의 원본 이동 ----------
     if (!options.skipMove) {
       var 완료폴더 = getOrCreateSubFolder_(folder, 완료폴더명);
       csvFiles.forEach(function (file) {
