@@ -4,13 +4,13 @@
  * ============================================================
  *  Input 폴더의 CSV/Google Spreadsheet를 파일명이 아닌 헤더로 판별하고,
  *  기존 업무 모듈을 순서대로 호출한다. 이 모듈은 업무 규칙을 복제하지 않고
- *  파일 감지·검증·이동과 S1/S2 → S3 → S4 → S9 연결만 담당한다.
+ *  파일 감지·검증·이동과 내부 S1~S4 서비스 및 S9 PDF를 연결한다.
  *
  *  처리 순서
  *    Input → 파일 판별/검증 → S1 또는 S2 → S3 → S4 → S9 PDF
  *    성공 원본 → Success/YYYY-MM-DD, 실패 원본 → Error/YYYY-MM-DD
  *
- *  재고 파일을 주문보다 먼저 처리해 예약대기 주문이 최신 재고로 재평가되게 한다.
+ *  재고 파일을 주문보다 먼저 처리하되 예약 주문은 조회만 갱신하고 자동 release하지 않는다.
  *  결과는 작업로그에 기록하고 실패 시 설정의 알림이메일로 Gmail을 발송한 뒤,
  *  마지막에 대시보드를 갱신한다. 성공 체크섬이 같은 재업로드는 중복 처리하지 않는다.
  */
@@ -161,16 +161,48 @@ function validateInput_(type, data) {
 /** 기존 S1~S4의 재고/주문/피킹 규칙을 그대로 조합하는 오케스트레이터. */
 function runInputBusiness_(type, file, outputFolder) {
   var result = {};
-  if (type === INPUT_TYPE.ORDER) result.ingest = S2_1_주문CSV취입(file, { silent: true });
-  else if (type === INPUT_TYPE.INVENTORY) result.inventory = S1_1_카페24재고동기화(file, true);
-  else throw inputError_('UNKNOWN_TYPE', '지원하지 않는 입력 유형입니다.', type);
+  if (type === INPUT_TYPE.INVENTORY) {
+    result.inventory = S1_1_카페24재고동기화(file, true);
+    result.availability = collectPreorderData_();
+    return result;
+  }
+  if (type !== INPUT_TYPE.ORDER) throw inputError_('UNKNOWN_TYPE', '지원하지 않는 입력 유형입니다.', type);
 
-  result.confirm = S3_1_주문확정();
-  result.picking = S4_1_피킹지시생성();
-  if (result.picking && result.picking.생성) {
+  result.ingest = S2_1_주문CSV취입(file, { silent: true });
+  result.confirm = S3_1_주문확정(result.ingest.주문번호, { silent: true });
+  if (!result.confirm.준비주문.length) return result; // 예약은 정상 입력 결과다.
+
+  result.picking = S4_1_피킹지시생성(result.confirm.준비주문, { silent: true });
+  if (!result.picking.지시번호) throw new Error('재고 예약 뒤 피킹지시를 만들지 못했습니다.');
+  try {
     result.pdf = S9_피킹PDF생성(result.picking.지시번호, outputFolder);
+    markPickingOutputState_(result.picking.지시번호, ENUM.헤더상태.대기);
+    markOrdersReady_(result.confirm.준비주문);
+  } catch (e) {
+    markPickingOutputState_(result.picking.지시번호, ENUM.헤더상태.출력오류);
+    writeOpLog_('runInputBusiness_', '실패', result.picking.지시번호 + ' / PDF / ' + e.message);
+    throw e;
   }
   return result;
+}
+
+/** PDF가 확인된 뒤에만 주문을 창고 작업 가능 상태로 전환한다. */
+function markOrdersReady_(orderNos) {
+  var target = {};
+  (orderNos || []).forEach(function (no) { target[toStr_(no)] = true; });
+  var table = readTable_(ROLE.주문);
+  var cNo = col_(table, COL.주문번호, true), cState = col_(table, COL.주문상태, true);
+  table.rows.forEach(function (row) {
+    if (target[toStr_(row[cNo])] && toStr_(row[cState]) === ENUM.주문상태.예약) row[cState] = ENUM.주문상태.처리완료;
+  });
+  if (table.rows.length) writeColumn_(table.sheet, cState, table.rows);
+}
+
+function markPickingOutputState_(instructionNo, state) {
+  var table = readTable_(ROLE.헤더);
+  var cNo = col_(table, COL.피킹지시번호, true), cState = col_(table, COL.상태, true);
+  table.rows.forEach(function (row) { if (toStr_(row[cNo]) === instructionNo) row[cState] = state; });
+  if (table.rows.length) writeColumn_(table.sheet, cState, table.rows);
 }
 
 function readUnifiedInput_(file) {
@@ -265,7 +297,9 @@ function inputError_(code, message, type, fingerprint) {
 
 function inputBusinessMessage_(result) {
   var picking = result && result.picking;
-  return picking && picking.생성 ? '피킹지시 ' + picking.지시번호 + ' 생성' : '입력 처리 완료 (신규 피킹 없음)';
+  if (picking && picking.지시번호) return '피킹지시 ' + picking.지시번호 + ' / PDF 준비 완료';
+  if (result && result.confirm && result.confirm.예약) return '주문 입력 완료 / 예약 ' + result.confirm.예약 + '건';
+  return '입력 처리 완료';
 }
 
 function notifyInputFailure_(fileName, code, message) {

@@ -147,9 +147,10 @@ function installResourceDefinitions_() {
   return [
     {
       role: ROLE.마스터, sheetName: '상품마스터',
-      headers: [COL.상품품목코드, COL.상품명, COL.옵션명, COL.이미지, COL.기본보관위치,
-        COL.가용재고, COL.예약재고, COL.불량재고, COL.상품상태, COL.예약상품,
-        COL.재고관리, COL.판매가, COL.최종동기화]
+      headers: [COL.상품품목코드, COL.상품명, COL.옵션명, COL.이미지,
+        COL.가용재고, COL.예약재고, COL.상품상태, COL.예약상품,
+        COL.재고관리, COL.판매가, COL.최종동기화,
+        COL.기본보관위치, COL.불량재고, '창고메모']
     },
     {
       role: ROLE.주문, sheetName: '주문(완료)',
@@ -160,11 +161,11 @@ function installResourceDefinitions_() {
         '수령인 우편번호', '수령인 주소', '배송메시지', '배송업체', '송장번호',
         '배송비', '배송유형',
         COL.출고완료, COL.피킹지시번호, COL.주문상태, COL.취소사유,
-        COL.취소일시, COL.확정일시, COL.대기사유]
+        COL.취소일시, COL.취소경로, COL.확정일시, COL.대기사유, '운영메모']
     },
     {
       role: ROLE.라인, sheetName: '피킹(라인)',
-      headers: [COL.순번, COL.보관위치, COL.상품코드, COL.이미지, COL.상품명,
+      headers: [COL.순번, COL.주문번호, COL.보관위치, COL.상품코드, COL.이미지, COL.상품명,
         COL.옵션, COL.필요수량, COL.확인, COL.실제수량, COL.예외사유,
         COL.품목별주문번호, COL.피킹지시번호, COL.담당자, COL.라인상태, COL.처리일시]
     },
@@ -182,7 +183,7 @@ function installAliases_() {
     ['상품코드', '상품품목코드,품목코드,SKU'],
     ['품목별 주문번호', '품목별주문번호,주문상세번호'],
     ['카트 슬롯', '카트 술룻,카트술룻,카트슬롯,슬롯'],
-    ['상태', '상태(대기/진행/완료/예외),피킹상태'],
+    ['상태', '피킹상태'],
     ['기본보관위치', '보관위치,로케이션,위치'],
     ['보관위치', '기본보관위치,로케이션,위치'],
     ['옵션', '옵션명'], ['옵션명', '옵션'],
@@ -336,16 +337,17 @@ function renderGuideSheet_(ss, folders) {
   sh.getRange(1, 1, 1, 8).merge().setValue('📖  Polar Penguin 운영 안내')
     .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
   sh.getRange(3, 1, 1, 8).merge().setValue(
-    'Input 파일 업로드  →  자동 주문/재고 판별  →  검증  →  재고 또는 주문 처리  →  주문 확정  →  피킹지시 생성  →  PDF 자동 생성  →  현장 피킹  →  O/X 입력  →  결과 반영'
+    'Input에 파일 넣기  →  자동 처리  →  Output PDF 확인  →  피킹  →  O/X 입력  →  자동 반영'
   ).setWrap(true).setBackground(DASHCOLOR.카드).setFontWeight('bold');
 
   var rows = [
     ['1. 파일 넣기', '주문 또는 재고 파일을 Drive의 Input 폴더에 업로드합니다. 파일 종류를 구분할 필요가 없습니다.'],
-    ['2. 자동 처리', '시스템이 유형 판별, 검증, 재고/주문 처리, 주문 확정, 피킹 생성, PDF 생성, Success 이동을 자동 실행합니다.'],
+    ['2. 자동 처리', '시스템이 유형 판별, 검증, 재고/주문 처리, 재고 예약, 피킹 생성, PDF 생성, Success 이동을 자동 실행합니다.'],
     ['3. 피킹', 'Output/YYYY-MM-DD 안의 PDF를 보고 피킹합니다.'],
     ['4. 결과 입력', '피킹(라인)에 O=정상, X=예외를 입력합니다. X이면 예외사유를 선택하며 주문 전체 취소 규칙이 적용됩니다.'],
     ['5. 결과 자동 반영', 'Trigger가 O/X 결과를 자동으로 재고와 주문 상태에 반영하고 대시보드를 갱신합니다.'],
-    ['6. 오류', '실패 파일은 Error/YYYY-MM-DD로 이동하며 입력 로그, 작업 로그, Gmail 알림에 기록됩니다.'],
+    ['6. 예약 주문', '재고가 확보되면 주문(완료)에서 주문을 선택하고 메뉴의 「예약 주문 피킹서 생성」을 실행합니다. 자동 release하지 않습니다.'],
+    ['7. 취소/오류', '주문 취소는 주문을 선택해 실행합니다. 실제 입력 실패만 Error로 이동하고 예약 주문은 Success로 이동합니다.'],
     ['', ''],
     ['폴더', 'Input=입력 · Success=성공 원본 · Error=실패 원본 · Output=피킹 PDF'],
     ['긴급 작업', '상단 「📦 Polar Penguin」 메뉴에서 Input 즉시 처리 또는 피킹 결과 즉시 반영을 실행할 수 있습니다.']
@@ -424,7 +426,6 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
     ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
     ['파라미터', '예약키워드', '예약', '상품명 예약 판정 문자열 (쉼표 구분)'],
     ['파라미터', '재고경고임계치', 3, '통합 대시보드 재고 경고 기준'],
-    ['파라미터', '추가투입임계(분)', 45, '주문 추가 투입 권고 기준'],
     ['파라미터', '알림이메일', '', '입력 처리 실패 알림 수신자']
   ];
   installAliases_().forEach(function (entry) { defaults.push(['별칭', entry[0], entry[1], '']); });
@@ -433,6 +434,14 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   result.updates.forEach(function (update) { sheet.getRange(update.row, 3).setValue(update.value); });
   if (result.additions.length) {
     sheet.getRange(Math.max(sheet.getLastRow() + 1, 2), 1, result.additions.length, 4).setValues(result.additions);
+  }
+  var configRows = sheet.getDataRange().getValues();
+  for (var i = 1; i < configRows.length; i++) {
+    var section = String(configRows[i][0] || '').trim(), key = String(configRows[i][1] || '').trim();
+    var systemManaged = section === '파일ID' || section === '시트명' ||
+      ['통합Input폴더ID', 'Success폴더ID', 'Error폴더ID', 'Output폴더ID'].indexOf(key) >= 0;
+    sheet.getRange(i + 1, 3).setBackground(systemManaged ? 'F2F2F2' : 'FFF9E6')
+      .setNote(systemManaged ? 'SYSTEM-MANAGED: setupSystem이 유효성을 관리합니다.' : 'USER-MANAGED: 운영자가 변경할 수 있습니다.');
   }
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, 4);
@@ -447,7 +456,7 @@ function removeLegacySetupConfig_(sheet) {
   if (!sheet || sheet.getLastRow() < 2) return 0;
   var legacy = {
     Processed폴더ID: true, Backup폴더ID: true, CSV폴더ID: true,
-    재고CSV폴더ID: true, CSV처리완료폴더명: true
+    재고CSV폴더ID: true, CSV처리완료폴더명: true, '추가투입임계(분)': true
   };
   var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
   var removed = 0;

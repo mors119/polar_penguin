@@ -55,6 +55,7 @@ var COL = {
   주문상태: '주문상태',
   취소사유: '취소사유',
   취소일시: '취소일시',
+  취소경로: '취소경로',
   확정일시: '확정일시',
   대기사유: '대기사유',
 
@@ -81,9 +82,9 @@ var COL = {
 };
 
 var ENUM = {
-  헤더상태: { 대기: '대기', 진행: '진행', 완료: '완료', 예외: '예외' },
-  라인상태: { 미처리: '미처리', 차감완료: '차감완료', 복원완료: '복원완료', 취소마감: '취소마감' },
-  주문상태: { 접수: '접수', 확정: '확정', 예약대기: '예약대기', 취소: '취소' },
+  헤더상태: { 대기: '대기', 완료: '완료', 취소: '취소', 출력오류: '출력오류' },
+  라인상태: { 미처리: '미처리', 완료: '완료', 취소: '취소' },
+  주문상태: { 처리완료: '처리완료', 예약: '예약', 출고완료: '출고완료', 취소: '취소' },
   확인: { 정상: 'O', 예외: 'X' },
   예외사유: ['재고없음', '불량재고'],
   로그구분: { 차감: '차감', 복원: '복원', 예약: '예약', 예약해제: '예약해제', 동기화: '동기화' }
@@ -337,21 +338,6 @@ function writeStockLog_(entries) {
   prependRows_(sh, rows);
 }
 
-/** 품목별 주문번호별 순변동 집계 (복원 계산의 근거) */
-function readStockLogNet_() {
-  var sh = consoleSS_().getSheetByName(CONSOLE.재고이동로그);
-  var net = {};
-  if (!sh || sh.getLastRow() < 2) return net;
-
-  var v = sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues();
-  for (var i = 0; i < v.length; i++) {
-    var key = toStr_(v[i][4]);
-    if (!key) continue;
-    net[key] = (net[key] || 0) + toNum_(v[i][6]);
-  }
-  return net;
-}
-
 function writeOpLog_(함수명, 결과, 메시지) {
   try {
     var sh = consoleSS_().getSheetByName(CONSOLE.작업로그);
@@ -384,28 +370,9 @@ function alert_(msg) {
   writeOpLog_('알림', '정보', msg);
 }
 
-function toast_(msg, title) {
-  try { consoleSS_().toast(String(msg).substring(0, 300), title || '피킹 시스템', 10); } catch (e) { }
-  Logger.log(msg);
-}
-
-function 설정_캐시초기화() {
-  _cache.config = null;
-  _cache.ss = {};
-  _cache.consoleSS = null;
-  alert_('설정 캐시를 초기화했습니다.');
-}
-
 /* ============================================================
  *  대시보드 공용 유틸
  * ============================================================ */
-
-/** 진행률 막대 */
-function bar_(pct, len) {
-  len = len || 12;
-  var filled = Math.max(0, Math.min(len, Math.round((pct / 100) * len)));
-  return new Array(filled + 1).join('█') + new Array(len - filled + 1).join('░');
-}
 
 /** 단일 운영 Spreadsheet의 대시보드 탭을 확보한다. */
 function ensureDashSheet_(ss, name) {

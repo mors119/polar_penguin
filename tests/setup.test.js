@@ -236,7 +236,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   }
   assert.ok(validationLists.some((values) => values.join(',') === 'O,X'));
   assert.ok(validationLists.some((values) => values.join(',') === '재고없음,불량재고'));
-  assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input 파일 업로드/);
+  assert.ok(validationLists.some((values) => values.join(',') === '처리완료,예약,출고완료,취소'));
+  assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input에 파일 넣기/);
 
   const configSheet = operationSs.getSheetByName('설정');
   const configValues = configSheet.getDataRange().getValues();
@@ -260,7 +261,7 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   const orderHeaders = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
   for (const header of ['주문번호', '품목별 주문번호', '상품품목코드', '수령인 휴대전화',
     '수령인 우편번호', '수령인 주소', '배송메시지', '출고완료', '피킹지시번호', '주문상태',
-    '취소사유', '취소일시', '확정일시', '대기사유']) {
+    '취소사유', '취소일시', '취소경로', '확정일시', '대기사유', '운영메모']) {
     assert.ok(orderHeaders.includes(header), `order schema is missing ${header}`);
   }
   orderSheet.getRange(2, 1).setValue('ORDER-KEEP');
