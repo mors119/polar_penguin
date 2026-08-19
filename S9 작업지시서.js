@@ -1,0 +1,346 @@
+/**
+ * ============================================================
+ *  S9. 작업지시서 출력  (v4.0 · 신규)
+ * ============================================================
+ *  피킹(헤더)와 피킹(라인) 사이에 놓이는 종이 단계다.
+ *
+ *  흐름
+ *   ① 작업자가 「작업지시서 출력」을 연다
+ *   ② 이름을 입력하고 가져갈 슬롯 수를 고른다
+ *   ③ 미배정 슬롯이 그 이름으로 배정되고 인쇄 화면이 뜬다
+ *   ④ 종이에 손으로 O/X를 적으며 창고를 돈다
+ *   ⑤ 돌아와서 피킹(라인) 시트에 옮겨 적는다
+ *
+ *  ③에서 헤더의 피킹담당자가 채워지므로,
+ *  S5가 라인의 담당자 칸까지 자동으로 채운다.
+ * ============================================================
+ */
+
+/** 메뉴 진입점 — 출력 대화상자를 연다 */
+function S9_1_작업지시서출력() {
+  var html = HtmlService.createHtmlOutput(작업지시서_HTML_())
+    .setWidth(900)
+    .setHeight(680);
+  SpreadsheetApp.getUi().showModalDialog(html, '작업지시서 출력');
+}
+
+/**
+ * 미배정 슬롯을 조회한다. (대화상자에서 호출)
+ */
+function S9_미배정슬롯조회() {
+  var 헤더 = readTable_(ROLE.헤더);
+  var H = {
+    지시: col_(헤더, COL.피킹지시번호, true),
+    주문: col_(헤더, COL.주문번호, true),
+    슬롯: col_(헤더, COL.카트슬롯, true),
+    품목수: col_(헤더, COL.품목수, true),
+    총수량: col_(헤더, COL.총수량, true),
+    담당: col_(헤더, COL.피킹담당자, true),
+    상태: col_(헤더, COL.상태, true)
+  };
+
+  var 미배정 = 0, 배정 = {};
+  헤더.rows.forEach(function (r) {
+    var 상태 = toStr_(r[H.상태]);
+    if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.예외) return;
+    var 담당 = toStr_(r[H.담당]);
+    if (담당) 배정[담당] = (배정[담당] || 0) + 1;
+    else 미배정++;
+  });
+
+  return {
+    미배정: 미배정,
+    배정: Object.keys(배정).map(function (k) { return { 이름: k, 슬롯: 배정[k] }; })
+  };
+}
+
+/**
+ * 작업지시서를 만든다.
+ * @param {String} 이름  작업자 이름
+ * @param {Number} 개수  가져갈 슬롯 수 (0이면 이미 배정된 것만 재출력)
+ */
+function S9_지시서생성(이름, 개수) {
+  return withLock_(function () {
+    이름 = String(이름 || '').trim();
+    if (!이름) throw new Error('작업자 이름을 입력하세요.');
+    개수 = Number(개수) || 0;
+
+    var 헤더 = readTable_(ROLE.헤더);
+    var H = {
+      지시: col_(헤더, COL.피킹지시번호, true),
+      주문: col_(헤더, COL.주문번호, true),
+      슬롯: col_(헤더, COL.카트슬롯, true),
+      품목수: col_(헤더, COL.품목수, true),
+      총수량: col_(헤더, COL.총수량, true),
+      담당: col_(헤더, COL.피킹담당자, true),
+      상태: col_(헤더, COL.상태, true),
+      출력일시: col_(헤더, COL.출력일시, false)
+    };
+
+    // ---------- 이미 이 사람에게 배정된 미완료 슬롯 ----------
+    var 내슬롯 = [];
+    헤더.rows.forEach(function (r, i) {
+      var 상태 = toStr_(r[H.상태]);
+      if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.예외) return;
+      if (toStr_(r[H.담당]) === 이름) 내슬롯.push(i);
+    });
+
+    // ---------- 추가 배정 ----------
+    var 신규배정 = 0;
+    if (개수 > 0) {
+      var 후보 = [];
+      헤더.rows.forEach(function (r, i) {
+        var 상태 = toStr_(r[H.상태]);
+        if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.예외) return;
+        if (!isBlank_(r[H.담당])) return;
+        후보.push({ idx: i, 슬롯: toNum_(r[H.슬롯]) });
+      });
+      후보.sort(function (a, b) { return a.슬롯 - b.슬롯; });   // 슬롯 번호 순
+
+      후보.slice(0, 개수).forEach(function (c) {
+        헤더.rows[c.idx][H.담당] = 이름;
+        if (H.출력일시 >= 0) 헤더.rows[c.idx][H.출력일시] = new Date();
+        내슬롯.push(c.idx);
+        신규배정++;
+      });
+
+      if (신규배정) {
+        writeColumn_(헤더.sheet, H.담당, 헤더.rows);
+        if (H.출력일시 >= 0) writeColumn_(헤더.sheet, H.출력일시, 헤더.rows);
+      }
+    }
+
+    if (!내슬롯.length) {
+      return { 오류: '배정된 슬롯이 없습니다. 가져갈 슬롯 수를 지정하고 다시 시도하세요.' };
+    }
+
+    // ---------- 라인 조회 ----------
+    var 주문 = readTable_(ROLE.주문);
+    var O = {
+      주문번호: col_(주문, COL.주문번호, true),
+      품목별: col_(주문, COL.품목별주문번호, true)
+    };
+    var 품목별_주문 = {};
+    주문.rows.forEach(function (r) {
+      var k = toStr_(r[O.품목별]);
+      if (k) 품목별_주문[k] = toStr_(r[O.주문번호]);
+    });
+
+    var 라인 = readTable_(ROLE.라인);
+    var L = {
+      순번: col_(라인, COL.순번, true),
+      보관위치: col_(라인, COL.보관위치, true),
+      상품코드: col_(라인, COL.상품코드, true),
+      상품명: col_(라인, COL.상품명, true),
+      옵션: col_(라인, COL.옵션, true),
+      필요수량: col_(라인, COL.필요수량, true),
+      품목별: col_(라인, COL.품목별주문번호, true),
+      라인상태: col_(라인, COL.라인상태, true)
+    };
+
+    var 주문별라인 = {};
+    라인.rows.forEach(function (r) {
+      var no = 품목별_주문[toStr_(r[L.품목별])];
+      if (!no) return;
+      if (toStr_(r[L.라인상태]) !== ENUM.라인상태.미처리) return;   // 이미 처리된 건 뺀다
+      (주문별라인[no] = 주문별라인[no] || []).push({
+        순번: toNum_(r[L.순번]),
+        위치: toStr_(r[L.보관위치]) || '(위치 미지정)',
+        코드: toStr_(r[L.상품코드]),
+        상품명: toStr_(r[L.상품명]),
+        옵션: toStr_(r[L.옵션]) === '-' ? '' : toStr_(r[L.옵션]),
+        수량: toNum_(r[L.필요수량])
+      });
+    });
+
+    // ---------- 지시서 구성 ----------
+    var 슬롯목록 = 내슬롯.map(function (i) {
+      var r = 헤더.rows[i];
+      var no = toStr_(r[H.주문]);
+      var items = (주문별라인[no] || []).slice()
+        .sort(function (a, b) { return a.순번 - b.순번; });
+      return {
+        슬롯: toNum_(r[H.슬롯]),
+        주문번호: no,
+        품목수: items.length,
+        총수량: items.reduce(function (a, x) { return a + x.수량; }, 0),
+        품목: items
+      };
+    }).filter(function (s) { return s.품목.length > 0; })
+      .sort(function (a, b) { return a.슬롯 - b.슬롯; });
+
+    if (!슬롯목록.length) {
+      return { 오류: '출력할 품목이 없습니다. 배정된 슬롯이 모두 처리되었습니다.' };
+    }
+
+    writeOpLog_('S9_지시서생성', '성공', 이름 + ' / 슬롯 ' + 슬롯목록.length + '개 / 신규배정 ' + 신규배정);
+
+    return {
+      이름: 이름,
+      출력시각: Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm'),
+      신규배정: 신규배정,
+      슬롯: 슬롯목록,
+      총품목: 슬롯목록.reduce(function (a, s) { return a + s.품목수; }, 0),
+      총수량: 슬롯목록.reduce(function (a, s) { return a + s.총수량; }, 0)
+    };
+  });
+}
+
+/** 대화상자 HTML */
+function 작업지시서_HTML_() {
+  return [
+'<!DOCTYPE html><html><head><meta charset="utf-8"><style>',
+'  * { box-sizing: border-box; }',
+'  body { font-family: "Malgun Gothic", sans-serif; margin: 0; padding: 16px; color: #222; }',
+'  h2 { margin: 0 0 4px; font-size: 18px; color: #1F3864; }',
+'  .sub { color: #777; font-size: 12px; margin-bottom: 14px; }',
+'  .panel { background: #F2F6FA; border: 1px solid #BFC9D4; border-radius: 6px; padding: 14px; margin-bottom: 14px; }',
+'  label { font-size: 13px; font-weight: bold; margin-right: 6px; }',
+'  input[type=text], input[type=number] { padding: 7px 9px; border: 1px solid #BFC9D4; border-radius: 4px; font-size: 14px; }',
+'  input[type=text] { width: 150px; }',
+'  input[type=number] { width: 70px; }',
+'  button { padding: 8px 18px; border: 0; border-radius: 4px; font-size: 14px; cursor: pointer; }',
+'  .primary { background: #2E5C8A; color: #fff; }',
+'  .print { background: #1F3864; color: #fff; }',
+'  button:disabled { background: #ccc; cursor: default; }',
+'  .info { font-size: 12px; color: #555; margin-top: 10px; line-height: 1.6; }',
+'  .err { color: #B03A2E; font-weight: bold; padding: 10px 0; }',
+'  #out { margin-top: 10px; }',
+'  .slot { border: 2px solid #1F3864; border-radius: 6px; margin-bottom: 16px; page-break-inside: avoid; }',
+'  .slothead { background: #1F3864; color: #fff; padding: 8px 12px; font-weight: bold; font-size: 15px;',
+'              display: flex; justify-content: space-between; }',
+'  table { width: 100%; border-collapse: collapse; font-size: 13px; }',
+'  th { background: #E8EDF3; padding: 6px; border: 1px solid #BFC9D4; font-size: 12px; }',
+'  td { padding: 7px 6px; border: 1px solid #D6DCE4; }',
+'  .loc { font-weight: bold; font-size: 15px; font-family: Consolas, monospace; }',
+'  .qty { text-align: center; font-weight: bold; font-size: 16px; }',
+'  .chk { width: 46px; text-align: center; }',
+'  .memo { width: 90px; }',
+'  .hdr { border-bottom: 3px solid #1F3864; padding-bottom: 8px; margin-bottom: 14px; }',
+'  .hdr h1 { margin: 0; font-size: 21px; }',
+'  .hdr .meta { font-size: 13px; color: #555; margin-top: 4px; }',
+'  .note { font-size: 12px; color: #B03A2E; margin: 8px 0 14px; }',
+'  @media print {',
+'    .noprint { display: none !important; }',
+'    body { padding: 0; }',
+'    .slot { page-break-inside: avoid; }',
+'  }',
+'</style></head><body>',
+
+'<div class="noprint">',
+'  <h2>작업지시서 출력</h2>',
+'  <div class="sub">이름을 넣고 가져갈 슬롯 수를 정하면, 미배정 슬롯이 순서대로 배정됩니다.</div>',
+'  <div class="panel">',
+'    <label>작업자 이름</label><input type="text" id="name" placeholder="예: 김서연">',
+'    &nbsp;&nbsp;<label>가져갈 슬롯</label><input type="number" id="cnt" value="5" min="0" max="50">',
+'    &nbsp;&nbsp;<button class="primary" id="go">불러오기</button>',
+'    <div class="info" id="status">현황을 불러오는 중…</div>',
+'  </div>',
+'  <div id="msg"></div>',
+'</div>',
+'<div id="out"></div>',
+
+'<script>',
+'function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){',
+'  return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];});}',
+'',
+'google.script.run.withSuccessHandler(function(d){',
+'  var t = "미배정 슬롯 <b>" + d.미배정 + "개</b>";',
+'  if (d.배정.length) {',
+'    t += "<br>배정됨 — " + d.배정.map(function(w){return esc(w.이름)+" "+w.슬롯+"개";}).join(" · ");',
+'  }',
+'  document.getElementById("status").innerHTML = t;',
+'}).S9_미배정슬롯조회();',
+'',
+'document.getElementById("go").onclick = function(){',
+'  var nm = document.getElementById("name").value.trim();',
+'  if(!nm){ alert("이름을 입력하세요."); return; }',
+'  var n = parseInt(document.getElementById("cnt").value, 10) || 0;',
+'  this.disabled = true; this.textContent = "불러오는 중…";',
+'  var btn = this;',
+'  document.getElementById("msg").innerHTML = "";',
+'  google.script.run',
+'    .withSuccessHandler(function(r){ btn.disabled=false; btn.textContent="불러오기"; render(r); })',
+'    .withFailureHandler(function(e){ btn.disabled=false; btn.textContent="불러오기";',
+'      document.getElementById("msg").innerHTML = "<div class=\\"err\\">"+esc(e.message)+"</div>"; })',
+'    .S9_지시서생성(nm, n);',
+'};',
+'',
+'function render(r){',
+'  if(r && r.오류){ document.getElementById("msg").innerHTML = "<div class=\\"err\\">"+esc(r.오류)+"</div>"; return; }',
+'  var h = "";',
+'  h += "<div class=\\"noprint\\" style=\\"margin:10px 0\\">";',
+'  h += "<button class=\\"print\\" onclick=\\"window.print()\\">🖨  인쇄하기</button>";',
+'  if(r.신규배정) h += " &nbsp;<span style=\\"font-size:12px;color:#2E5C8A\\">새로 "+r.신규배정+"개 슬롯이 배정되었습니다.</span>";',
+'  h += "</div>";',
+'',
+'  h += "<div class=\\"hdr\\"><h1>피킹 작업지시서</h1>";',
+'  h += "<div class=\\"meta\\">작업자 <b>"+esc(r.이름)+"</b>";',
+'  h += " &nbsp;·&nbsp; 출력 "+esc(r.출력시각);',
+'  h += " &nbsp;·&nbsp; 슬롯 "+r.슬롯.length+"개 &nbsp;·&nbsp; 품목 "+r.총품목+"종 &nbsp;·&nbsp; 총 "+r.총수량+"개</div></div>";',
+'  h += "<div class=\\"note\\">※ 한 슬롯 안에서 하나라도 문제가 생기면 그 주문 전체가 취소됩니다. 나머지 품목은 집지 마세요.</div>";',
+'',
+'  r.슬롯.forEach(function(s){',
+'    h += "<div class=\\"slot\\"><div class=\\"slothead\\">";',
+'    h += "<span>카트 슬롯 "+s.슬롯+"</span>";',
+'    h += "<span style=\\"font-weight:normal;font-size:13px\\">"+esc(s.주문번호)+" &nbsp; 품목 "+s.품목수+" / 수량 "+s.총수량+"</span>";',
+'    h += "</div><table><tr>";',
+'    h += "<th style=\\"width:38px\\">No</th><th style=\\"width:100px\\">보관위치</th>";',
+'    h += "<th style=\\"width:115px\\">상품코드</th><th>상품명 / 옵션</th>";',
+'    h += "<th style=\\"width:52px\\">수량</th><th class=\\"chk\\">O/X</th><th class=\\"memo\\">사유</th></tr>";',
+'    s.품목.forEach(function(it){',
+'      h += "<tr><td style=\\"text-align:center\\">"+it.순번+"</td>";',
+'      h += "<td class=\\"loc\\">"+esc(it.위치)+"</td>";',
+'      h += "<td style=\\"font-family:Consolas,monospace;font-size:12px\\">"+esc(it.코드)+"</td>";',
+'      h += "<td>"+esc(it.상품명)+(it.옵션?" <span style=\\"color:#666\\">/ "+esc(it.옵션)+"</span>":"")+"</td>";',
+'      h += "<td class=\\"qty\\">"+it.수량+"</td><td class=\\"chk\\"></td><td class=\\"memo\\"></td></tr>";',
+'    });',
+'    h += "</table></div>";',
+'  });',
+'',
+'  document.getElementById("out").innerHTML = h;',
+'}',
+'</script></body></html>'
+  ].join('\n');
+}
+
+/**
+ * S9_2. 담당자 배정 해제 — 잘못 배정했을 때 되돌린다.
+ */
+function S9_2_배정해제(이름) {
+  return withLock_(function () {
+    if (!이름) {
+      var ui = null;
+      try { ui = SpreadsheetApp.getUi(); } catch (e) { }
+      if (!ui) throw new Error('이름을 인자로 넘겨주세요.');
+      var resp = ui.prompt('배정 해제',
+        '배정을 해제할 작업자 이름을 입력하세요.\n아직 시작하지 않은(대기) 슬롯만 해제됩니다.',
+        ui.ButtonSet.OK_CANCEL);
+      if (resp.getSelectedButton() !== ui.Button.OK) return;
+      이름 = resp.getResponseText().trim();
+      if (!이름) return;
+    }
+
+    var 헤더 = readTable_(ROLE.헤더);
+    var H = {
+      담당: col_(헤더, COL.피킹담당자, true),
+      상태: col_(헤더, COL.상태, true)
+    };
+
+    var 해제 = 0;
+    헤더.rows.forEach(function (r) {
+      if (toStr_(r[H.담당]) !== 이름) return;
+      if (toStr_(r[H.상태]) !== ENUM.헤더상태.대기) return;   // 진행 중인 건 건드리지 않는다
+      r[H.담당] = '';
+      해제++;
+    });
+
+    if (해제) writeColumn_(헤더.sheet, H.담당, 헤더.rows);
+
+    var msg = 이름 + ' 님의 대기 슬롯 ' + 해제 + '개를 해제했습니다.' +
+      (해제 === 0 ? '\n(진행 중이거나 완료된 슬롯은 해제되지 않습니다)' : '');
+    alert_(msg);
+    writeOpLog_('S9_2_배정해제', '성공', 이름 + ' / ' + 해제 + '개');
+    return 해제;
+  });
+}
