@@ -1,5 +1,23 @@
 /** 주문 취소의 유일한 재고 복원 경로. 모든 호출자는 주문번호 전체를 넘긴다. */
 function cancelOrder_(orderNo, reason, source, options) {
+  var originalState = '확인 불가';
+  try {
+    var before = readTable_(ROLE.주문), beforeNo = col_(before, COL.주문번호, true), beforeState = col_(before, COL.주문상태, true);
+    before.rows.some(function (row) {
+      if (toStr_(row[beforeNo]) !== toStr_(orderNo)) return false;
+      originalState = toStr_(row[beforeState]) || originalState; return true;
+    });
+    return cancelOrderCore_(orderNo, reason, source, options);
+  } catch (e) {
+    sendSystemNotification_('ERROR', '주문 취소 실패', {
+      주문번호: toStr_(orderNo), 원래상태: originalState, 시도작업: toStr_(source) || 'SYSTEM',
+      오류: e.message, 재고변경여부: '확인 필요 — 작업로그와 재고이동로그를 확인하세요.'
+    });
+    throw e;
+  }
+}
+
+function cancelOrderCore_(orderNo, reason, source, options) {
   options = options || {};
   return withLock_(function () {
     orderNo = toStr_(orderNo); reason = toStr_(reason) || '기타'; source = toStr_(source) || 'SYSTEM';

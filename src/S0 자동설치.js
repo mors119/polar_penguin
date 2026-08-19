@@ -129,6 +129,7 @@ function ensureProjectFolders_(root, report) {
   folders.success = ensureChildFolder_(root, 'Success', 'Success', report);
   folders.error = ensureChildFolder_(root, 'Error', 'Error', report);
   folders.output = ensureChildFolder_(root, 'Output', 'Output', report);
+  folders.backup = ensureChildFolder_(root, 'Backup', 'Backup', report);
   return folders;
 }
 
@@ -212,12 +213,13 @@ function persistOperation_(ss, rootId, folders) {
     FOLDER_ID_INPUT: folders.input.getId(),
     FOLDER_ID_SUCCESS: folders.success.getId(),
     FOLDER_ID_ERROR: folders.error.getId(),
-    FOLDER_ID_OUTPUT: folders.output.getId()
+    FOLDER_ID_OUTPUT: folders.output.getId(),
+    FOLDER_ID_BACKUP: folders.backup.getId()
   };
   properties.setProperties(values, false);
   // 이전 버전의 저장 위치 키만 정리하며 실제 레거시 폴더나 파일은 삭제하지 않는다.
   if (typeof properties.deleteProperty === 'function') {
-    ['FOLDER_ID_PROCESSED', 'FOLDER_ID_BACKUP'].forEach(function (key) {
+    ['FOLDER_ID_PROCESSED'].forEach(function (key) {
       properties.deleteProperty(key);
     });
   }
@@ -239,6 +241,7 @@ function ensureOperationalSheets_(ss) {
   ]);
   ensureInstallSheet_(ss, CONSOLE.작업로그, ['시각', '함수', '결과', '메시지', '실행계정']);
   ensureInstallSheet_(ss, CONSOLE.입력처리로그, INPUT_LOG_HEADERS);
+  ensureInstallSheet_(ss, CONSOLE.처리주문아카이브, ORDER_ARCHIVE_HEADERS);
   ensureInstallSheet_(ss, CONSOLE.설정, ['구분', '키', '값', '비고']);
   return resources;
 }
@@ -320,7 +323,7 @@ function hideInternalSheets_(ss) {
   } catch (ignore) { }
   [
     '피킹(헤더)', CONSOLE.재고이동로그, CONSOLE.작업로그,
-    CONSOLE.입력처리로그, CONSOLE.설정
+    CONSOLE.입력처리로그, CONSOLE.처리주문아카이브, CONSOLE.설정
   ].forEach(function (name) {
     var sheet = ss.getSheetByName(name);
     if (!sheet) return;
@@ -349,8 +352,9 @@ function renderGuideSheet_(ss, folders) {
     ['5. 예약 주문', '재고 입고 후 「예약상품 피킹 관리」에서 상품을 선택합니다. FIFO 대상의 PDF에서 상품 총수량을 피킹하고 주문별로 포장합니다.'],
     ['6. 위치 관리', '대시보드의 위치 미지정 경고를 확인하고 「📍 위치 관리 → 위치 미지정 상품」에서 위치를 입력해 저장합니다.'],
     ['7. 취소/오류', '문제가 있으면 주문을 선택해 취소합니다. 시스템이 출고 또는 예약 상태에 맞춰 재고를 한 번만 복원합니다.'],
+    ['8. 백업 및 정리', '월 1회 또는 필요할 때 「⚙ 관리 → 백업 및 정리」를 실행합니다. 전체 Spreadsheet 백업이 검증된 뒤 오래된 완료 데이터와 Success/Error/Output 파일을 정리하고 결과 이메일을 보냅니다. 백업 실패 시 아무것도 삭제하지 않습니다.'],
     ['', ''],
-    ['폴더', 'Input=입력 · Success=성공 원본 · Error=실패 원본 · Output=피킹 PDF'],
+    ['폴더', 'Input=입력 · Success=성공 원본 · Error=실패 원본 · Output=피킹 PDF · Backup=전체 시스템 백업'],
     ['긴급 작업', '상단 「📦 Polar Penguin」 메뉴에서 Input 즉시 처리 또는 피킹지시서 조회/재출력을 실행할 수 있습니다.']
   ];
   sh.getRange(5, 1, rows.length, 2).setValues(rows).setWrap(true);
@@ -421,13 +425,15 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   managed.push(['파라미터', 'Success폴더ID', folders.success.getId(), '정상 처리 원본', exactFolder(folders.success)]);
   managed.push(['파라미터', 'Error폴더ID', folders.error.getId(), '처리 실패 원본', exactFolder(folders.error)]);
   managed.push(['파라미터', 'Output폴더ID', folders.output.getId(), '피킹 PDF 출력', exactFolder(folders.output)]);
+  managed.push(['파라미터', '백업폴더ID', folders.backup.getId(), '전체 Spreadsheet 백업', exactFolder(folders.backup)]);
 
   var defaults = [
     ['파라미터', '폴링주기(분)', 5, '변경 후 setupSystem 재실행'],
     ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
     ['파라미터', '예약키워드', '예약', '상품명 예약 판정 문자열 (쉼표 구분)'],
     ['파라미터', '재고경고임계치', 3, '통합 대시보드 재고 경고 기준'],
-    ['파라미터', '알림이메일', '', '입력 처리 실패 알림 수신자']
+    ['파라미터', '알림이메일', '', '시스템 오류 및 유지보수 알림 수신자'],
+    ['파라미터', '정리보존일수', 30, '완료 데이터와 Success/Error/Output 보존 일수']
   ];
   installAliases_().forEach(function (entry) { defaults.push(['별칭', entry[0], entry[1], '']); });
 
@@ -440,7 +446,7 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   for (var i = 1; i < configRows.length; i++) {
     var section = String(configRows[i][0] || '').trim(), key = String(configRows[i][1] || '').trim();
     var systemManaged = section === '파일ID' || section === '시트명' ||
-      ['통합Input폴더ID', 'Success폴더ID', 'Error폴더ID', 'Output폴더ID'].indexOf(key) >= 0;
+      ['통합Input폴더ID', 'Success폴더ID', 'Error폴더ID', 'Output폴더ID', '백업폴더ID'].indexOf(key) >= 0;
     sheet.getRange(i + 1, 3).setBackground(systemManaged ? 'F2F2F2' : 'FFF9E6')
       .setNote(systemManaged ? 'SYSTEM-MANAGED: setupSystem이 유효성을 관리합니다.' : 'USER-MANAGED: 운영자가 변경할 수 있습니다.');
   }
@@ -452,7 +458,7 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   report.configuration.push('Folder IDs registered');
 }
 
-/** 더 이상 읽지 않는 다중 입력/Processed/Backup 설정 행만 제거한다. */
+/** 더 이상 읽지 않는 다중 입력/Processed/영문 Backup 설정 행만 제거한다. */
 function removeLegacySetupConfig_(sheet) {
   if (!sheet || sheet.getLastRow() < 2) return 0;
   var legacy = {

@@ -30,3 +30,10 @@ test('order ingest keeps item-order-number deduplication for reuploaded orders',
   assert.equal(result.rows[0][1], 'I-2');
   assert.equal(result.중복, 1);
 });
+
+test('archived item-order keys continue to block reimport after active rows are cleaned', () => {
+  context.getArchivedItemOrderKeys_ = () => ({ 'ITEM-001': true });
+  const keys = context.buildExistingItemOrderKeys_({ rows: [['ITEM-ACTIVE']] }, 0);
+  assert.equal(keys['ITEM-ACTIVE'], true);
+  assert.equal(keys['ITEM-001'], true);
+});

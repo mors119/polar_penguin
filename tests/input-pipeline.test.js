@@ -91,6 +91,7 @@ test('reservation is a successful order result without picking or PDF', () => {
 
 test('PDF failure records output error and never finalizes shipment', () => {
   const calls = [];
+  context.sendSystemNotification_ = (level, title) => { calls.push(level + ':' + title); return { sent: true }; };
   context.S2_1_주문CSV취입 = () => ({ 신규: 1, 주문번호: ['O-1'] });
   context.S3_1_주문확정 = () => ({ 준비: 1, 예약: 0, 준비주문: ['O-1'] });
   context.S4_1_피킹지시생성 = () => ({ 생성: true, 지시번호: 'PK-1' });
@@ -98,7 +99,7 @@ test('PDF failure records output error and never finalizes shipment', () => {
   context.markPickingOutputState_ = (no, state) => calls.push(state);
   context.writeOpLog_ = () => {};
   assert.throws(() => context.runInputBusiness_('ORDER', {}, {}), /render failed/);
-  assert.deepEqual(calls, ['출력오류']);
+  assert.deepEqual(calls, ['출력오류', 'ERROR:피킹 PDF 생성 실패']);
   context.markPickingOutputState_ = originalMarkPickingOutputState;
 });
 
@@ -114,4 +115,14 @@ test('unsupported and corrupt files receive stable validation error codes', () =
     () => context.readUnifiedInput_({ getName: () => 'broken.csv', getMimeType: () => 'text/csv' }),
     (error) => error.inputCode === 'CORRUPT_FILE'
   );
+});
+
+test('input failure delegates to the centralized system notifier', () => {
+  const calls = [];
+  context.sendSystemNotification_ = (level, title, details) => { calls.push({ level, title, details }); return { sent: true }; };
+  assert.equal(context.notifyInputFailure_('orders.csv', 'BAD_ROWS', 'invalid quantity'), true);
+  assert.equal(calls[0].level, 'ERROR');
+  assert.equal(calls[0].title, 'Input 처리 실패');
+  assert.equal(calls[0].details.파일명, 'orders.csv');
+  assert.equal(calls[0].details.오류코드, 'BAD_ROWS');
 });

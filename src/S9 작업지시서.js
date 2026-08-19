@@ -13,7 +13,16 @@ function S9_1_작업지시서출력() {
 
 // HtmlService에서 호출할 공개 endpoint. 계산 함수는 아래의 내부 helper에 둔다.
 function getPickingInstructionList() { return getPickingInstructionList_(); }
-function preparePickingInstructionOutput(instructionNo) { return S9_수동출력준비_(instructionNo); }
+function preparePickingInstructionOutput(instructionNo) {
+  try { return S9_수동출력준비_(instructionNo); }
+  catch (e) {
+    sendSystemNotification_('ERROR', '피킹지시서 출력 준비 실패', {
+      피킹지시번호: toStr_(instructionNo), 오류: e.message,
+      조치: '피킹지시서 조회 / 재출력에서 상태를 확인하고 다시 시도하세요.'
+    });
+    throw e;
+  }
+}
 function retryPickingInstructionPdf(instructionNo) { return S9_피킹PDF재시도(instructionNo); }
 
 /** 피킹라인을 SKU별로 합치며 주문 건수는 주문번호 unique count로 센다. */
@@ -250,7 +259,12 @@ function S9_피킹PDF재시도(instructionNo) {
     D0_대시보드전체갱신(true);
     return { 메시지: (result.재사용 ? '기존 PDF를 확인했습니다.' : 'PDF를 다시 생성했습니다.') + ' ' + instructionNo };
   } catch (e) {
-    markPickingOutputState_(instructionNo, ENUM.헤더상태.출력오류); throw e;
+    markPickingOutputState_(instructionNo, ENUM.헤더상태.출력오류);
+    sendSystemNotification_('ERROR', '피킹 PDF 재시도 실패', {
+      피킹지시번호: instructionNo, 오류: e.message,
+      조치: '피킹지시서 조회 / 재출력에서 상태를 확인하고 다시 시도하세요.'
+    });
+    throw e;
   }
 }
 
