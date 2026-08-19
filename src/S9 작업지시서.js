@@ -58,11 +58,14 @@ function S9_미배정슬롯조회() {
  * 작업지시서를 만든다.
  * @param {String} 이름  작업자 이름
  * @param {Number} 개수  가져갈 슬롯 수 (0이면 이미 배정된 것만 재출력)
+ * @param {{readOnly:Boolean=, 지시번호:String=}=} options PDF용 조회는 담당자/출력일시를 변경하지 않는다.
  */
-function S9_지시서생성(이름, 개수) {
+function S9_지시서생성(이름, 개수, options) {
   return withLock_(function () {
+    options = options || {};
     이름 = String(이름 || '').trim();
-    if (!이름) throw new Error('작업자 이름을 입력하세요.');
+    if (!이름 && !options.readOnly) throw new Error('작업자 이름을 입력하세요.');
+    if (!이름) 이름 = '자동 생성';
     개수 = Number(개수) || 0;
 
     var 헤더 = readTable_(ROLE.헤더);
@@ -82,12 +85,13 @@ function S9_지시서생성(이름, 개수) {
     헤더.rows.forEach(function (r, i) {
       var 상태 = toStr_(r[H.상태]);
       if (상태 === ENUM.헤더상태.완료 || 상태 === ENUM.헤더상태.예외) return;
-      if (toStr_(r[H.담당]) === 이름) 내슬롯.push(i);
+      if (options.지시번호 && toStr_(r[H.지시]) !== String(options.지시번호)) return;
+      if (options.readOnly || toStr_(r[H.담당]) === 이름) 내슬롯.push(i);
     });
 
     // ---------- 추가 배정 ----------
     var 신규배정 = 0;
-    if (개수 > 0) {
+    if (개수 > 0 && !options.readOnly) {
       var 후보 = [];
       헤더.rows.forEach(function (r, i) {
         var 상태 = toStr_(r[H.상태]);
@@ -183,6 +187,64 @@ function S9_지시서생성(이름, 개수) {
       총품목: 슬롯목록.reduce(function (a, s) { return a + s.품목수; }, 0),
       총수량: 슬롯목록.reduce(function (a, s) { return a + s.총수량; }, 0)
     };
+  });
+}
+
+/** 신규 피킹 배치를 Output/YYYY-MM-DD에 PDF로 보존하며 Output 전체에서 중복을 검사한다. */
+function S9_피킹PDF생성(지시번호, outputRoot) {
+  if (!지시번호) return { 생성: false, 사유: '지시번호 없음' };
+  outputRoot = outputRoot || DriveApp.getFolderById(String(param_('Output폴더ID', '')));
+
+  var fileName = String(지시번호) + '.pdf';
+  if (S9_findPDF_(outputRoot, fileName)) {
+    return { 생성: false, 재사용: true, 파일명: fileName };
+  }
+  var dateName = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd');
+  var dateFolder = getOrCreateSubFolder_(outputRoot, dateName);
+
+  var data = S9_지시서생성('', 0, { readOnly: true, 지시번호: 지시번호 });
+  if (data.오류) throw new Error(data.오류);
+  var html = S9_PDFHTML_(data, 지시번호);
+  var pdf = HtmlService.createHtmlOutput(html).getBlob().getAs(MimeType.PDF).setName(fileName);
+  var file = dateFolder.createFile(pdf);
+  writeOpLog_('S9_피킹PDF생성', '성공', fileName);
+  return { 생성: true, 파일ID: file.getId(), 파일명: fileName };
+}
+
+function S9_findPDF_(outputRoot, fileName) {
+  if (outputRoot.getFilesByName(fileName).hasNext()) return true;
+  var folders = outputRoot.getFolders();
+  while (folders.hasNext()) {
+    if (folders.next().getFilesByName(fileName).hasNext()) return true;
+  }
+  return false;
+}
+
+function S9_PDFHTML_(data, 지시번호) {
+  var parts = ['<!doctype html><html><head><meta charset="utf-8"><style>',
+    'body{font-family:sans-serif;color:#222}h1{font-size:22px}h2{background:#1F3864;color:#fff;padding:8px}',
+    'table{width:100%;border-collapse:collapse;margin-bottom:18px}th,td{border:1px solid #aaa;padding:6px}',
+    'th{background:#E8EDF3}.qty{text-align:center;font-weight:bold}.loc{font-weight:bold}',
+    '</style></head><body><h1>피킹 작업지시서 ', S9_escapeHtml_(지시번호), '</h1>',
+    '<p>생성 ', S9_escapeHtml_(data.출력시각), ' · 슬롯 ', data.슬롯.length, '개 · 총 ', data.총수량, '개</p>'];
+  data.슬롯.forEach(function (slot) {
+    parts.push('<h2>카트 슬롯 ', slot.슬롯, ' · ', S9_escapeHtml_(slot.주문번호), '</h2>',
+      '<table><tr><th>No</th><th>보관위치</th><th>상품코드</th><th>상품명 / 옵션</th><th>수량</th><th>O/X</th><th>사유</th></tr>');
+    slot.품목.forEach(function (item) {
+      parts.push('<tr><td>', item.순번, '</td><td class="loc">', S9_escapeHtml_(item.위치),
+        '</td><td>', S9_escapeHtml_(item.코드), '</td><td>', S9_escapeHtml_(item.상품명),
+        item.옵션 ? ' / ' + S9_escapeHtml_(item.옵션) : '', '</td><td class="qty">', item.수량,
+        '</td><td></td><td></td></tr>');
+    });
+    parts.push('</table>');
+  });
+  parts.push('</body></html>');
+  return parts.join('');
+}
+
+function S9_escapeHtml_(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
   });
 }
 

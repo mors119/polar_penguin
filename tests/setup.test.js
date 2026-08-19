@@ -192,14 +192,22 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
 
   const first = context.setupSystem();
   assert.equal(properties.get('ROOT_FOLDER_ID'), root.getId());
-  assert.equal(first.folders.filter((item) => item.created).length, 8);
+  assert.equal(first.folders.filter((item) => item.created).length, 9);
+  assert.deepEqual(plain(first.folders.map((item) => item.name)),
+    ['01 Console', '02 Master', '03 Orders', '04 Picking', 'Input', 'Processed', 'Error', 'Output', 'Backup']);
   assert.equal(first.spreadsheets.filter((item) => item.created).length, 5);
   assert.equal(spreadsheets.size, 5);
-  assert.deepEqual(triggers.map((trigger) => trigger.getHandlerFunction()).sort(), ['onOpen', 'syncAndRefresh']);
+  assert.deepEqual(triggers.map((trigger) => trigger.getHandlerFunction()).sort(), ['onOpen', 'processInput', 'syncAndRefresh']);
 
   const consoleSs = spreadsheets.get(properties.get('CONSOLE_SS_ID'));
   const configSheet = consoleSs.getSheetByName('설정');
   const configValues = configSheet.getDataRange().getValues();
+  const inputId = properties.get('FOLDER_ID_INPUT');
+  for (const key of ['통합Input폴더ID', 'CSV폴더ID', '재고CSV폴더ID']) {
+    const row = configValues.find((value) => value[0] === '파라미터' && value[1] === key);
+    assert.equal(row[2], inputId);
+  }
+  assert.ok(consoleSs.getSheetByName('입력처리로그'));
   const pollingRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '폴링주기(분)') + 1;
   configSheet.getRange(pollingRow, 3).setValue(15);
 
@@ -216,7 +224,7 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
   assert.equal(configSheet.getRange(pollingRow, 3).getValue(), 15);
   assert.equal(orderSheet.getRange(2, 1).getValue(), 'ORDER-KEEP');
   assert.equal(masterSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
-  assert.equal(triggers.length, 2);
+  assert.equal(triggers.length, 3);
   assert.equal(triggers.find((trigger) => trigger.getHandlerFunction() === 'syncAndRefresh').minutes, 15);
 
   const oldHeaderId = properties.get('SPREADSHEET_ID_PICKING_HEADER');
@@ -233,6 +241,6 @@ test('setupSystem installs, reruns safely, repairs one missing spreadsheet, and 
   const headerConfig = repairedConfig.find((row) => row[0] === '파일ID' && row[1] === '피킹헤더');
   assert.equal(headerConfig[2], repairedHeaderId);
   assert.equal(spreadsheets.size, 5);
-  assert.equal(triggers.length, 2);
+  assert.equal(triggers.length, 3);
   assert.equal(dashboardRefreshes, 3);
 });
