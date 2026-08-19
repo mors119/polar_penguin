@@ -46,7 +46,7 @@ function 설치_2_시트정비(silent) {
       var s = toStr_(r[c주문상태]);
       if (toNum_(r[col_(주문, COL.출고완료, true)]) === 1) return [ENUM.주문상태.출고완료];
       if (!s || s === '정상' || s === '접수' || s === '예약대기') return [ENUM.주문상태.예약];
-      if (s === '확정') return [ENUM.주문상태.예약];
+      if (s === '확정' || s === '처리완료') return [ENUM.주문상태.예약];
       return [r[c주문상태]];
     });
     주문.sheet.getRange(2, c주문상태 + 1, 상태값.length, 1).setValues(상태값);
@@ -54,8 +54,7 @@ function 설치_2_시트정비(silent) {
 
   주문.sheet.getRange(2, c주문상태 + 1, Math.max(주문.sheet.getMaxRows() - 1, 1), 1)
     .setDataValidation(SpreadsheetApp.newDataValidation()
-      .requireValueInList([ENUM.주문상태.처리완료, ENUM.주문상태.예약,
-                           ENUM.주문상태.출고완료, ENUM.주문상태.취소], true)
+      .requireValueInList([ENUM.주문상태.예약, ENUM.주문상태.출고완료, ENUM.주문상태.취소], true)
       .setAllowInvalid(false).build());
 
   [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, '수령인 우편번호', '수령인 휴대전화']
@@ -80,10 +79,8 @@ function 설치_2_시트정비(silent) {
     }));
   }
   헤더.sheet.getRange(2, c헤더상태 + 1, Math.max(헤더.sheet.getMaxRows() - 1, 1), 1)
-    .setDataValidation(SpreadsheetApp.newDataValidation()
-      .requireValueInList([ENUM.헤더상태.대기, ENUM.헤더상태.완료,
-                           ENUM.헤더상태.취소, ENUM.헤더상태.출력오류], true)
-      .setAllowInvalid(false).build());
+    .clearDataValidations().setBackground('F2F2F2');
+  헤더.sheet.getRange(1, c헤더상태 + 1).setNote('시스템 관리 필드입니다. 출력 결과에 따라 자동 변경됩니다.');
 
   // 담당자 칸을 노란색으로 — 여기 이름을 적으면 라인까지 전파된다
   var c담당 = col_(헤더, COL.피킹담당자, true);
@@ -114,23 +111,13 @@ function 설치_2_시트정비(silent) {
   }
 
   var maxRows = Math.max(라인.sheet.getMaxRows() - 1, 1);
-  라인.sheet.getRange(2, c확인 + 1, maxRows, 1).setDataValidation(
-    SpreadsheetApp.newDataValidation()
-      .requireValueInList([ENUM.확인.정상, ENUM.확인.예외], true)
-      .setAllowInvalid(false)
-      .setHelpText('O = 정상 / X = 예외(주문 전체 취소)').build());
-  라인.sheet.getRange(2, c예외 + 1, maxRows, 1).setDataValidation(
-    SpreadsheetApp.newDataValidation()
-      .requireValueInList(ENUM.예외사유, true)
-      .setAllowInvalid(false).build());
+  라인.sheet.getRange(2, c확인 + 1, maxRows, 1).clearDataValidations();
+  라인.sheet.getRange(2, c예외 + 1, maxRows, 1).clearDataValidations();
   라인.sheet.getRange(1, c확인 + 1).setNote(
-    'O = 정상, X = 예외입니다. X 입력 시 예외사유를 선택하세요. 결과는 자동 반영되며 필요하면 상단 메뉴에서 즉시 반영할 수 있습니다.');
-  라인.sheet.getRange(1, c예외 + 1).setNote('X인 행은 재고없음 또는 불량재고를 선택하세요.');
-  라인.sheet.getRange(2, c확인 + 1, maxRows, 1).setBackground('FFF2CC');
-  라인.sheet.getRange(2, c예외 + 1, maxRows, 1).setBackground('FFF2CC');
+    '시스템 관리 필드입니다. 출력 성공 시 자동으로 O가 기록됩니다.');
+  라인.sheet.getRange(1, c예외 + 1).setNote('이전 버전 호환용 감사 필드입니다. 문제 처리는 선택 주문 취소를 사용하세요.');
   라인.headers.forEach(function (header, idx) {
-    if ([COL.확인, COL.예외사유].indexOf(toStr_(header)) >= 0) return;
-    라인.sheet.getRange(1, idx + 1).setNote('시스템 생성 필드입니다. 확인(O/X)과 예외사유만 입력하세요.');
+    라인.sheet.getRange(1, idx + 1).setNote('시스템 생성/관리 필드입니다. 직접 입력하지 마세요.');
     라인.sheet.getRange(2, idx + 1, maxRows, 1).setBackground('F2F2F2');
   });
   라인.sheet.setColumnWidth(c확인 + 1, 80);
@@ -146,7 +133,7 @@ function 설치_2_시트정비(silent) {
     라인.sheet.setColumnWidth(idx + 1, widths[name]);
   });
   라인.sheet.setFrozenRows(1);
-  결과.push('피킹(라인): O/X · 예외사유 드롭다운 적용');
+  결과.push('피킹(라인): 시스템 관리 감사 시트로 정비');
 
   /* ---------- 상품마스터 ---------- */
   var 마스터 = readTable_(ROLE.마스터);
@@ -199,7 +186,7 @@ function 설치_2_시트정비(silent) {
  * ============================================================ */
 
 /**
- * 설정의 폴링주기에 맞춰 통합 Input, 결과 반영/대시보드 및 메뉴 트리거를 등록한다.
+ * 설정의 폴링주기에 맞춰 통합 Input 및 메뉴 트리거를 등록한다.
  * 같은 역할의 현재·레거시 handler를 먼저 제거한 뒤 하나씩 다시 만들어 중복을 막는다.
  *
  * @param {boolean=} silent true면 완료 알림을 표시하지 않는다.
@@ -219,7 +206,6 @@ function 설치_3_트리거등록(silent) {
   var 주기 = Number(param_('폴링주기(분)', 5));
   if ([1, 5, 10, 15, 30].indexOf(주기) < 0) 주기 = 5;
 
-  ScriptApp.newTrigger('syncAndRefresh').timeBased().everyMinutes(주기).create();
   ScriptApp.newTrigger('processInput').timeBased().everyMinutes(주기).create();
 
   var 메뉴 = true;
@@ -227,7 +213,7 @@ function 설치_3_트리거등록(silent) {
   catch (e) { 메뉴 = false; }
 
   var msg = 주기 + '분 주기 트리거를 등록했습니다.\n' +
-    '통합 Input 처리 + 재고 반영 + 대시보드 갱신이 함께 실행됩니다.\n' +
+    '통합 Input 처리가 실행되며 각 변경 직후 대시보드가 갱신됩니다.\n' +
     (메뉴 ? '"' + ss.getName() + '" 을 열면 메뉴가 표시됩니다.' : '⚠ 메뉴 트리거 등록 실패');
 
   if (!silent) alert_(msg);
@@ -325,17 +311,15 @@ function onOpen(e) {
       .addSubMenu(ui.createMenu('📥 Input')
         .addItem('Input 지금 처리', 'processInput'))
       .addSubMenu(ui.createMenu('📋 주문')
-        .addItem('선택 주문 취소', '선택_주문취소'))
-      .addSubMenu(ui.createMenu('📋 예약상품')
+        .addItem('선택 주문 취소', '선택_주문취소')
         .addItem('예약상품 피킹 관리', '예약상품_피킹관리'))
-      .addSubMenu(ui.createMenu('📄 피킹')
-        .addItem('작업지시서 조회/재출력', 'S9_1_작업지시서출력')
-        .addItem('피킹 결과 지금 반영', 'S5_2_수동반영'))
+      .addSubMenu(ui.createMenu('📄 출력')
+        .addItem('작업지시서 조회 / 재출력', 'S9_1_작업지시서출력'))
       .addSubMenu(ui.createMenu('📊 운영')
         .addItem('대시보드 갱신', 'D0_대시보드전체갱신')
         .addItem('시스템 상태 확인', '진단_시트구조'))
       .addSubMenu(ui.createMenu('⚙ 관리')
-        .addItem('시스템 설치/복구', 'setupSystem')
+        .addItem('시스템 설치 / 복구', 'setupSystem')
         .addItem('설정 보기', '설정_보기')
         .addItem('로그 정리', '정리_로그'))
       .addToUi();

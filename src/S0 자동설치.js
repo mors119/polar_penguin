@@ -337,20 +337,19 @@ function renderGuideSheet_(ss, folders) {
   sh.getRange(1, 1, 1, 8).merge().setValue('📖  Polar Penguin 운영 안내')
     .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
   sh.getRange(3, 1, 1, 8).merge().setValue(
-    'Input에 파일 넣기  →  자동 처리  →  Output PDF 확인  →  피킹  →  O/X 입력  →  자동 반영'
+    'Input에 파일 넣기  →  자동 처리  →  PDF 생성  →  재고/출고 자동 반영'
   ).setWrap(true).setBackground(DASHCOLOR.카드).setFontWeight('bold');
 
   var rows = [
     ['1. 파일 넣기', '주문 또는 재고 파일을 Drive의 Input 폴더에 업로드합니다. 파일 종류를 구분할 필요가 없습니다.'],
     ['2. 자동 처리', '시스템이 유형 판별, 검증, 재고/주문 처리, 재고 예약, 피킹 생성, PDF 생성, Success 이동을 자동 실행합니다.'],
-    ['3. 피킹', 'Output/YYYY-MM-DD 안의 PDF를 보고 피킹합니다.'],
-    ['4. 결과 입력', '피킹(라인)에 O=정상, X=예외를 입력합니다. X이면 예외사유를 선택하며 주문 전체 취소 규칙이 적용됩니다.'],
-    ['5. 결과 자동 반영', 'Trigger가 O/X 결과를 자동으로 재고와 주문 상태에 반영하고 대시보드를 갱신합니다.'],
-    ['6. 예약 주문', '재고가 확보되면 메뉴의 「예약상품 피킹 관리」에서 상품을 선택합니다. 시스템이 FIFO 대상을 계산하며 자동 release하지 않습니다.'],
-    ['7. 취소/오류', '주문 취소는 주문을 선택해 실행합니다. 실제 입력 실패만 Error로 이동하고 예약 주문은 Success로 이동합니다.'],
+    ['3. 자동 출고 반영', 'PDF가 준비되면 예약재고가 자동 소진되고 피킹 라인/헤더와 주문이 출고완료로 바뀝니다.'],
+    ['4. 피킹', 'Output/YYYY-MM-DD 안의 PDF를 보고 피킹합니다. 피킹(라인)은 시스템 관리 이력 시트입니다.'],
+    ['5. 예약 주문', '재고 입고 후 「예약상품 피킹 관리」에서 상품을 선택하면 FIFO 대상의 PDF와 출고 반영이 함께 완료됩니다.'],
+    ['6. 취소/오류', '문제가 있으면 주문을 선택해 취소합니다. 시스템이 출고 또는 예약 상태에 맞춰 재고를 한 번만 복원합니다.'],
     ['', ''],
     ['폴더', 'Input=입력 · Success=성공 원본 · Error=실패 원본 · Output=피킹 PDF'],
-    ['긴급 작업', '상단 「📦 Polar Penguin」 메뉴에서 Input 즉시 처리 또는 피킹 결과 즉시 반영을 실행할 수 있습니다.']
+    ['긴급 작업', '상단 「📦 Polar Penguin」 메뉴에서 Input 즉시 처리 또는 작업지시서 조회/재출력을 실행할 수 있습니다.']
   ];
   sh.getRange(5, 1, rows.length, 2).setValues(rows).setWrap(true);
   sh.getRange(5, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);

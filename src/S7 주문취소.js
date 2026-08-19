@@ -18,7 +18,7 @@ function cancelOrder_(orderNo, reason, source, options) {
     var state = toStr_(items[0].row[O.상태]);
     if (state === ENUM.주문상태.취소) return { 취소: false, 이미취소: true, 메시지: '이미 취소된 주문입니다.' };
     if (state === ENUM.주문상태.출고완료 && !options.confirmReturn) {
-      return { 취소: false, 확인필요: true, 메시지: '이미 출고완료된 주문입니다. 취소하면 출고 수량을 가용재고로 복원합니다. 실제 상품이 창고에 반환되었는지 확인하세요.' };
+      return { 취소: false, 확인필요: true, 메시지: '이미 피킹지시서가 출력되어 출고 처리된 주문입니다.\n취소하면 해당 출고 수량을 가용재고로 복원합니다.\n계속하시겠습니까?' };
     }
 
     var required = {};
@@ -37,7 +37,7 @@ function cancelOrder_(orderNo, reason, source, options) {
       index[toStr_(row[M.코드])] = idx; available[idx] = toNum_(row[M.가용]); reserved[idx] = toNum_(row[M.예약]);
     });
     var logs = [], actor = 사용자_(), instruction = toStr_(items[0].row[col_(주문, COL.피킹지시번호, true)]);
-    var reservationWasMade = state === ENUM.주문상태.처리완료 ||
+    var reservationWasMade = state === '처리완료' ||
       (state === ENUM.주문상태.예약 && O.확정일시 >= 0 && !isBlank_(items[0].row[O.확정일시]));
     Object.keys(required).forEach(function (code) {
       var mi = index[code];

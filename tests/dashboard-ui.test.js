@@ -34,11 +34,12 @@ test('integrated dashboard renderer writes the real dashboard tab and visible ac
   context.Utilities = { formatDate: () => '2026-08-19 10:00:00' };
   context.tz_ = () => 'Asia/Seoul';
   context.renderIntegratedDashboard_(ss,
-    { 처리완료: 2, 예약: 3, 취소: 4, 출고완료: 5, 전체: 14,
+    { 예약: 3, 취소: 4, 출고완료: 5, 전체: 12,
       예약전체: 3, 예약수량: 8, 예약출고가능: 1, 예약출고가능SKU: 1, 예약부족: 2,
       권고: { 제목: '주문 확정', 내용: ['확인'], 색: 'FFFFFF' } },
     { 총가용: 100, 총예약: 10, 부족: [1], 품절: 2, 예약부족SKU: [1] },
-    { 전체라인: 8, 처리라인: 6, 미처리라인: 2, 진행률: 75, 작업대상주문: 1, kpi: { 출력오류: 0 } },
+    { 전체라인: 8, 처리라인: 6, 미처리라인: 2, 진행률: 75, 작업대상주문: 1,
+      오늘지시: 2, 오늘출고수량: 10, kpi: { 출력오류: 0 } },
     { latestTime: '2026-08-19 09:55', latestResult: 'PROCESSED · orders.csv', warning: '없음', recentErrors: [] });
   assert.deepEqual(requested, ['📊 대시보드']);
   assert.equal(cells.get('1:1'), '📊  Polar Penguin 통합 대시보드');
@@ -62,7 +63,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
   context.Logger = { log() {} };
   context.onOpen();
   assert.ok(menuNames.includes('📦 Polar Penguin'));
-  for (const expected of ['processInput', '선택_주문취소', '예약상품_피킹관리', 'S5_2_수동반영',
+  for (const expected of ['processInput', '선택_주문취소', '예약상품_피킹관리',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '진단_시트구조',
     'setupSystem', '정리_로그', '설정_보기']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
@@ -70,9 +71,9 @@ test('onOpen registers the current menu and every handler exists in source', () 
   for (const internal of ['S1_1_카페24재고동기화', 'S2_1_주문CSV취입', 'S3_1_주문확정', 'S4_1_피킹지시생성']) {
     assert.equal(handlers.includes(internal), false, `${internal} must stay out of the operator menu`);
   }
-  for (const expected of ['Input 지금 처리', '작업지시서 조회/재출력', '피킹 결과 지금 반영',
+  for (const expected of ['Input 지금 처리', '작업지시서 조회 / 재출력',
     '선택 주문 취소', '예약상품 피킹 관리', '대시보드 갱신', '시스템 상태 확인',
-    '시스템 설치/복구', '설정 보기', '로그 정리']) {
+    '시스템 설치 / 복구', '설정 보기', '로그 정리']) {
     assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
   }
   for (const internal of ['카페24 재고 동기화', '주문 CSV 취입', '주문 확정', '피킹지시 생성']) {
