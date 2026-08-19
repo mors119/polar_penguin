@@ -1,185 +1,26 @@
 /**
  * ============================================================
- *  01. 설치  (v4.0)
+ *  01. 설치 호환 함수 및 운영 시트 정비
  * ============================================================
- *  실행 순서
- *    0) 설정_콘솔파일지정()      ← 00_공통.gs 의 CONSOLE_SS_ID 입력 후
- *    1) 설치_1_초기설정()
- *    2) 설정_파일URL등록()
- *    3) 점검_연결확인()
- *    4) 설치_2_시트정비()        ← 신규 열·드롭다운·정렬
- *    5) 설치_3_트리거등록()      ← 5분 주기 + 메뉴
- *    6) D0_대시보드전체갱신()    ← 대시보드 3종 생성
+ *  공식 설치 진입점은 setupSystem()이다.
  * ============================================================
  */
 
-var DEFAULT_FOLDER_ID = '1NqqOtvW9ZG5ddoXmXoi9N1zVNuNjG26l';
+var DEFAULT_FOLDER_ID = '';
 
-var ROLE_HINTS = [
-  { role: ROLE.마스터, keys: ['상품마스터', '상품 마스터', '마스터'] },
-  { role: ROLE.주문,   keys: ['주문완료', '주문 완료', '주문'] },
-  { role: ROLE.헤더,   keys: ['피킹해더', '피킹헤더', '피킹 해더', '피킹 헤더', '해더', '헤더'] },
-  { role: ROLE.라인,   keys: ['피킹라인', '피킹 라인', '라인'] }
-];
-
-/* ============================================================
- *  설치 1
- * ============================================================ */
-
-function 설치_1_초기설정() {
-  var ss = consoleSS_();
-
-  ensureSheet_(ss, CONSOLE.설정, ['구분', '키', '값', '비고']);
-  ensureSheet_(ss, CONSOLE.재고이동로그, [
-    '시각', '구분', '피킹지시번호', '주문번호', '품목별 주문번호',
-    '상품코드', '변동량', '변동 후 재고', '담당자', '사유'
-  ]);
-  ensureSheet_(ss, CONSOLE.작업로그, ['시각', '함수', '결과', '메시지', '실행계정']);
-
-  var 설정 = ss.getSheetByName(CONSOLE.설정);
-  if (설정.getLastRow() > 1) {
-    var m = '[설정] 탭에 이미 값이 있어 덮어쓰지 않았습니다.\n초기화하려면 2행 이하를 지우고 다시 실행하세요.';
-    alert_(m);
-    return m;
-  }
-
-  var 발견 = scanFolder_(DEFAULT_FOLDER_ID);
-  var rows = [];
-
-  [ROLE.마스터, ROLE.주문, ROLE.헤더, ROLE.라인].forEach(function (role) {
-    rows.push(['파일ID', role, 발견[role] ? 발견[role].id : '',
-      발견[role] ? 발견[role].name : '⚠ 설정_파일URL등록() 실행']);
-  });
-  [ROLE.마스터, ROLE.주문, ROLE.헤더, ROLE.라인].forEach(function (role) {
-    rows.push(['시트명', role, 발견[role] ? 발견[role].firstSheet : '', '비우면 첫 시트 사용']);
-  });
-
-  rows.push(['파라미터', 'CSV폴더ID', DEFAULT_FOLDER_ID, '주문 CSV 업로드 폴더']);
-  rows.push(['파라미터', '재고CSV폴더ID', DEFAULT_FOLDER_ID, '카페24 재고 CSV 폴더']);
-  rows.push(['파라미터', 'CSV처리완료폴더명', '처리완료', '취입 후 CSV 이동 대상']);
-  rows.push(['파라미터', '폴링주기(분)', 5, '변경 후 설치_3 재실행']);
-  rows.push(['파라미터', '지시번호접두어', 'PK', '배치번호 형식']);
-  rows.push(['파라미터', '예약키워드', '예약', '상품명에 이 단어가 있으면 예약상품']);
-  rows.push(['파라미터', '재고경고임계치', 3, '재고현황 대시보드 경고 기준']);
-  rows.push(['파라미터', '추가투입임계(분)', 45, '이 시간 내 완료 예상이면 주문 추가 투입 권고']);
-
-  var 별칭 = [
-    ['상품품목코드', '상품코드,품목코드,SKU,내부SKU'],
-    ['상품코드', '상품품목코드,품목코드,SKU'],
-    ['품목별 주문번호', '품목별주문번호,주문상세번호'],
-    ['카트 슬롯', '카트 술룻,카트술룻,카트슬롯,슬롯'],
-    ['상태', '상태(대기/진행/완료/예외),피킹상태'],
-    ['기본보관위치', '보관위치,로케이션,위치'],
-    ['보관위치', '기본보관위치,로케이션,위치'],
-    ['옵션', '옵션명'],
-    ['옵션명', '옵션'],
-    ['수량', '주문수량'],
-    ['필요수량', '주문수량,지시수량'],
-    ['예약재고', '예약,확보재고'],
-    ['담당자', '피킹담당자,작업자']
-  ];
-  별칭.forEach(function (a) { rows.push(['별칭', a[0], a[1], '']); });
-
-  설정.getRange(2, 1, rows.length, 4).setValues(rows);
-  설정.setFrozenRows(1);
-  설정.autoResizeColumns(1, 4);
-  _cache.config = null;
-
-  var msg = '초기 설정 완료 — ' + ss.getName() + '\n\n' + describeScan_(발견) +
-            '\n\n다음: 설정_파일URL등록() → 점검_연결확인() → 설치_2_시트정비()';
-  alert_(msg);
-  return msg;
-}
-
-/* ============================================================
- *  파일 URL 등록
- * ============================================================ */
+function 설치_1_초기설정() { return setupSystem(); }
 
 function 설정_파일URL등록() {
-  var 입력 = {
-    '상품마스터': 'https://docs.google.com/spreadsheets/d/1XVnoHk4DauGSOSfO1-TyZXwBzQ0NGevy6SE7icOTMPQ/edit',
-    '주문완료':   'https://docs.google.com/spreadsheets/d/1SOFqzaPoqmiJpt3MOhB1Hk7qZPoWdoE6vXy5kSOgJzs/edit',
-    '피킹헤더':   'https://docs.google.com/spreadsheets/d/16gJieIY8vZ3gRzMgAvuG_6WuCaad0yTZd0lbgdYZuIY/edit',
-    '피킹라인':   'https://docs.google.com/spreadsheets/d/1PwHJOkP-xRe7rDaZMeicRhg-BKviCYhLytJG_zpBLO8/edit'
-  };
-
-  var 설정 = consoleSS_().getSheetByName(CONSOLE.설정);
-  if (!설정) throw new Error('[설정] 탭이 없습니다. 설치_1_초기설정() 을 먼저 실행하세요.');
-
-  var v = 설정.getDataRange().getValues();
-  var out = [];
-
-  for (var i = 1; i < v.length; i++) {
-    if (String(v[i][0]).trim() !== '파일ID') continue;
-    var 역할 = String(v[i][1]).trim();
-    if (!입력[역할]) continue;
-
-    var m = String(입력[역할]).match(/[-\w]{25,}/);
-    if (!m) { out.push('❌ ' + 역할 + ': ID를 못 찾음'); continue; }
-
-    var name;
-    try { name = SpreadsheetApp.openById(m[0]).getName(); }
-    catch (e) { out.push('❌ ' + 역할 + ': 열 수 없음 (권한 확인)'); continue; }
-
-    설정.getRange(i + 1, 3).setValue(m[0]);
-    out.push('✅ ' + 역할 + ' → ' + name);
-  }
-
-  _cache.config = null;
-  _cache.ss = {};
-  var msg = out.join('\n');
-  Logger.log(msg);
-  alert_(msg);
-  return msg;
+  throw new Error('수동 Spreadsheet URL 등록은 더 이상 사용하지 않습니다. setRootFolder() 후 setupSystem()을 실행하세요.');
 }
 
-/**
- * 설정 탭에 빠진 파라미터·별칭을 보충한다.
- * 이미 있는 키는 건드리지 않으므로 여러 번 실행해도 안전하다.
- */
-function 설정_파라미터보충() {
-  var 설정 = consoleSS_().getSheetByName(CONSOLE.설정);
-  if (!설정) throw new Error('[설정] 탭이 없습니다. 설치_1_초기설정() 을 먼저 실행하세요.');
-
-  var 추가할것 = [
-    ['파라미터', 'CSV폴더ID', DEFAULT_FOLDER_ID, '주문 CSV 업로드 폴더'],
-    ['파라미터', '재고CSV폴더ID', DEFAULT_FOLDER_ID, '카페24 재고 CSV 폴더'],
-    ['파라미터', 'CSV처리완료폴더명', '처리완료', '취입 후 CSV 이동 대상'],
-    ['파라미터', '폴링주기(분)', 5, '변경 후 설치_3 재실행'],
-    ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
-    ['파라미터', '예약키워드', '예약', '상품명에 이 단어가 있으면 예약상품 (쉼표 구분)'],
-    ['파라미터', '재고경고임계치', 3, '재고현황 대시보드 경고 기준'],
-    ['파라미터', '추가투입임계(분)', 45, '이 시간 내 완료 예상이면 주문 추가 투입 권고'],
-    ['별칭', '예약재고', '예약,확보재고', ''],
-    ['별칭', '담당자', '피킹담당자,작업자', '']
-  ];
-
-  var v = 설정.getDataRange().getValues();
-  var 있음 = {};
-  for (var i = 1; i < v.length; i++) {
-    있음[String(v[i][0]).trim() + '|' + String(v[i][1]).trim()] = true;
-  }
-
-  var 신규 = 추가할것.filter(function (r) { return !있음[r[0] + '|' + r[1]]; });
-  if (!신규.length) {
-    alert_('추가할 파라미터가 없습니다. 이미 모두 있습니다.');
-    return '변경 없음';
-  }
-
-  설정.getRange(설정.getLastRow() + 1, 1, 신규.length, 4).setValues(신규);
-  _cache.config = null;
-
-  var msg = '파라미터 ' + 신규.length + '건 추가\n\n' +
-    신규.map(function (r) { return '  · ' + r[1] + ' = ' + r[2]; }).join('\n');
-  alert_(msg);
-  return msg;
-}
+function 설정_파라미터보충() { return setupSystem(); }
 
 /* ============================================================
  *  설치 2. 시트 정비
  * ============================================================ */
 
-function 설치_2_시트정비() {
+function 설치_2_시트정비(silent) {
   var 결과 = [];
 
   /* ---------- 주문 (완료) ---------- */
@@ -286,7 +127,7 @@ function 설치_2_시트정비() {
 
   var msg = '시트 정비 완료\n\n' + 결과.join('\n') +
             '\n\n다음: 설치_3_트리거등록() → D0_대시보드전체갱신()';
-  alert_(msg);
+  if (!silent) alert_(msg);
   writeOpLog_('설치_2_시트정비', '성공', 결과.join(' / '));
   return msg;
 }
@@ -295,7 +136,7 @@ function 설치_2_시트정비() {
  *  설치 3. 트리거
  * ============================================================ */
 
-function 설치_3_트리거등록() {
+function 설치_3_트리거등록(silent) {
   var ss = consoleSS_();
 
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -318,7 +159,7 @@ function 설치_3_트리거등록() {
     '재고 반영 + 대시보드 3종 갱신이 함께 실행됩니다.\n' +
     (메뉴 ? '"' + ss.getName() + '" 을 열면 메뉴가 표시됩니다.' : '⚠ 메뉴 트리거 등록 실패');
 
-  alert_(msg);
+  if (!silent) alert_(msg);
   writeOpLog_('설치_3_트리거등록', '성공', 주기 + '분');
   return msg;
 }
@@ -389,57 +230,6 @@ function 진단_시트구조() {
  *  헬퍼
  * ============================================================ */
 
-function ensureSheet_(ss, name, headers) {
-  var sh = ss.getSheetByName(name);
-  if (!sh) {
-    sh = ss.insertSheet(name);
-    sh.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
-    sh.setFrozenRows(1);
-  }
-  return sh;
-}
-
-function scanFolder_(folderId) {
-  var 결과 = {}, folder;
-  try { folder = DriveApp.getFolderById(folderId); } catch (e) { return 결과; }
-
-  var files = folder.getFilesByType(MimeType.GOOGLE_SHEETS);
-  var 목록 = [];
-  while (files.hasNext()) {
-    var f = files.next();
-    목록.push({ id: f.getId(), name: f.getName() });
-  }
-
-  ROLE_HINTS.forEach(function (hint) {
-    for (var i = 0; i < 목록.length; i++) {
-      var n = normKey_(목록[i].name);
-      for (var k = 0; k < hint.keys.length; k++) {
-        if (n.indexOf(normKey_(hint.keys[k])) >= 0 && !isTaken_(결과, 목록[i].id)) {
-          결과[hint.role] = 목록[i];
-          return;
-        }
-      }
-    }
-  });
-
-  for (var role in 결과) {
-    try { 결과[role].firstSheet = SpreadsheetApp.openById(결과[role].id).getSheets()[0].getName(); }
-    catch (e) { 결과[role].firstSheet = ''; }
-  }
-  return 결과;
-}
-
-function isTaken_(결과, id) {
-  for (var k in 결과) if (결과[k].id === id) return true;
-  return false;
-}
-
-function describeScan_(발견) {
-  return [ROLE.마스터, ROLE.주문, ROLE.헤더, ROLE.라인].map(function (role) {
-    return '  · ' + role + ' → ' + (발견[role] ? 발견[role].name : '❌ 설정_파일URL등록() 실행');
-  }).join('\n');
-}
-
 function ensureColumns_(sheet, headers, names) {
   var 존재 = {};
   headers.forEach(function (h) { 존재[normKey_(h)] = true; });
@@ -464,6 +254,8 @@ function onOpen(e) {
   try {
     var ui = SpreadsheetApp.getUi();
     ui.createMenu('📦 피킹 운영')
+      .addItem('⚙️ 시스템 설치 · 복구', 'setupSystem')
+      .addSeparator()
       .addItem('S1. 카페24 재고 동기화', 'S1_1_카페24재고동기화')
       .addItem('S2. 주문 CSV 취입', 'S2_1_주문CSV취입')
       .addItem('S3. 주문 확정 (재고 검증)', 'S3_1_주문확정')
