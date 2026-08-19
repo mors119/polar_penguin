@@ -39,32 +39,34 @@ var CAFE24 = {
 /**
  * S1_1. 카페24 재고 CSV → 상품마스터 동기화
  */
-function S1_1_카페24재고동기화() {
+function S1_1_카페24재고동기화(입력파일, silent) {
   return withLock_(function () {
     // ---------- CSV 찾기 ----------
-    var 폴더ID = String(param_(CAFE24.폴더파라미터, param_('CSV폴더ID', DEFAULT_FOLDER_ID)));
-    var folder;
-    try {
-      folder = DriveApp.getFolderById(폴더ID);
-    } catch (e) {
-      throw new Error('재고 CSV 폴더를 열 수 없습니다. [설정] 탭의 ' + CAFE24.폴더파라미터 + ' 확인. (' + 폴더ID + ')');
-    }
+    var 대상 = 입력파일 || null, 후보 = [];
+    if (!대상) {
+      var 폴더ID = String(param_(CAFE24.폴더파라미터, param_('CSV폴더ID', DEFAULT_FOLDER_ID)));
+      var folder;
+      try {
+        folder = DriveApp.getFolderById(폴더ID);
+      } catch (e) {
+        throw new Error('재고 CSV 폴더를 열 수 없습니다. [설정] 탭의 ' + CAFE24.폴더파라미터 + ' 확인. (' + 폴더ID + ')');
+      }
 
-    // ---------- 파일 찾기 (CSV + 변환된 구글시트 모두) ----------
-    var 대상 = null, 후보 = [];
-    var it = folder.getFiles();
-    while (it.hasNext()) {
-      var f = it.next();
-      var n = f.getName();
-      if (n.indexOf(CAFE24.파일접두어) < 0) continue;
+      // ---------- 파일 찾기 (CSV + 변환된 구글시트 모두) ----------
+      var it = folder.getFiles();
+      while (it.hasNext()) {
+        var f = it.next();
+        var n = f.getName();
+        if (n.indexOf(CAFE24.파일접두어) < 0) continue;
 
-      var mime = f.getMimeType();
-      var csv파일 = /\.csv$/i.test(n) || mime.indexOf('csv') >= 0;
-      var 시트파일 = mime === MimeType.GOOGLE_SHEETS;
-      if (!csv파일 && !시트파일) continue;
+        var mime = f.getMimeType();
+        var csv파일 = /\.csv$/i.test(n) || mime.indexOf('csv') >= 0;
+        var 시트파일 = mime === MimeType.GOOGLE_SHEETS;
+        if (!csv파일 && !시트파일) continue;
 
-      후보.push(n + (시트파일 ? ' [구글시트]' : ' [CSV]'));
-      if (!대상 || f.getLastUpdated() > 대상.getLastUpdated()) 대상 = f;
+        후보.push(n + (시트파일 ? ' [구글시트]' : ' [CSV]'));
+        if (!대상 || f.getLastUpdated() > 대상.getLastUpdated()) 대상 = f;
+      }
     }
 
     if (!대상) {
@@ -274,7 +276,7 @@ function S1_1_카페24재고동기화() {
       msg += '\n\n⚠ 재고 경고\n   ' + 요약.경고.slice(0, 5).join('\n   ');
     }
 
-    alert_(msg);
+    if (!silent) alert_(msg);
     writeOpLog_('S1_1_카페24재고동기화', '성공',
       '신규 ' + 요약.신규 + ' / 갱신 ' + 요약.갱신 + ' / 재고변동 ' + 요약.재고변동);
     return 요약;

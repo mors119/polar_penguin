@@ -22,8 +22,9 @@ var TEXT_COLUMNS_ORDER = [
   '수령인 휴대전화'
 ];
  
-function S2_1_주문CSV취입() {
+function S2_1_주문CSV취입(입력파일, options) {
   return withLock_(function () {
+    options = options || {};
     var 폴더ID = String(param_('CSV폴더ID', DEFAULT_FOLDER_ID));
     var 완료폴더명 = String(param_('CSV처리완료폴더명', '처리완료'));
  
@@ -35,19 +36,21 @@ function S2_1_주문CSV취입() {
     }
  
     // ---------- CSV 수집 (카페24 재고 파일은 제외) ----------
-    var csvFiles = [];
-    var it = folder.getFiles();
-    while (it.hasNext()) {
-      var f = it.next();
-      var n = f.getName();
-      if (n.indexOf(CAFE24.파일접두어) >= 0) continue;   // 재고 파일 제외
+    var csvFiles = 입력파일 ? [입력파일] : [];
+    if (!입력파일) {
+      var it = folder.getFiles();
+      while (it.hasNext()) {
+        var f = it.next();
+        var n = f.getName();
+        if (n.indexOf(CAFE24.파일접두어) >= 0) continue;   // 재고 파일 제외
 
-      var mime = f.getMimeType();
-      var csv파일 = /\.csv$/i.test(n) || mime.indexOf('csv') >= 0;
-      var 시트파일 = mime === MimeType.GOOGLE_SHEETS;
-      if (!csv파일 && !시트파일) continue;
+        var mime = f.getMimeType();
+        var csv파일 = /\.csv$/i.test(n) || mime.indexOf('csv') >= 0;
+        var 시트파일 = mime === MimeType.GOOGLE_SHEETS;
+        if (!csv파일 && !시트파일) continue;
 
-      csvFiles.push(f);
+        csvFiles.push(f);
+      }
     }
     if (!csvFiles.length) {
       alert_('폴더에 처리할 주문 CSV가 없습니다.\n(카페24 재고 CSV는 S1에서 처리합니다)');
@@ -97,22 +100,24 @@ function S2_1_주문CSV취입() {
     }
  
     // ---------- 처리한 CSV 이동 ----------
-    var 완료폴더 = getOrCreateSubFolder_(folder, 완료폴더명);
-    csvFiles.forEach(function (file) {
-      try {
-        완료폴더.addFile(file);
-        folder.removeFile(file);
-      } catch (e) {
-        리포트.push('⚠ ' + file.getName() + ' 이동 실패: ' + e.message);
-      }
-    });
+    if (!options.skipMove) {
+      var 완료폴더 = getOrCreateSubFolder_(folder, 완료폴더명);
+      csvFiles.forEach(function (file) {
+        try {
+          완료폴더.addFile(file);
+          folder.removeFile(file);
+        } catch (e) {
+          리포트.push('⚠ ' + file.getName() + ' 이동 실패: ' + e.message);
+        }
+      });
+    }
  
     var msg = 'CSV 취입 완료\n\n' + 리포트.join('\n') +
       '\n\n합계 — 신규 ' + 총신규 + '건 / 중복 제외 ' + 총중복 + '건' +
       (총오류 ? ' / 오류 ' + 총오류 + '건' : '') +
       '\n\n다음: 「S3. 주문 확정」으로 재고를 검증하세요.';
  
-    alert_(msg);
+    if (!options.silent) alert_(msg);
     writeOpLog_('S2_1_주문CSV취입', '성공', msg.replace(/\n/g, ' | '));
     return { 파일수: csvFiles.length, 신규: 총신규, 중복: 총중복, 오류: 총오류 };
   });

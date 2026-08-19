@@ -113,10 +113,11 @@ function ensureProjectFolders_(root, report) {
   folders.master = ensureChildFolder_(root, '02 Master', 'Master', report);
   folders.orders = ensureChildFolder_(root, '03 Orders', 'Orders', report);
   folders.picking = ensureChildFolder_(root, '04 Picking', 'Picking', report);
-  folders.input = ensureChildFolder_(root, '05 Input', 'Input', report);
-  folders.inputOrders = ensureChildFolder_(folders.input, 'Orders', 'Input/Orders', report);
-  folders.inputInventory = ensureChildFolder_(folders.input, 'Inventory', 'Input/Inventory', report);
-  folders.archive = ensureChildFolder_(root, '99 Archive', 'Archive', report);
+  folders.input = ensureChildFolder_(root, 'Input', 'Input', report);
+  folders.processed = ensureChildFolder_(root, 'Processed', 'Processed', report);
+  folders.error = ensureChildFolder_(root, 'Error', 'Error', report);
+  folders.output = ensureChildFolder_(root, 'Output', 'Output', report);
+  folders.backup = ensureChildFolder_(root, 'Backup', 'Backup', report);
   return folders;
 }
 
@@ -195,9 +196,11 @@ function persistConsole_(ss, rootId, folders) {
     FOLDER_ID_MASTER: folders.master.getId(),
     FOLDER_ID_ORDERS: folders.orders.getId(),
     FOLDER_ID_PICKING: folders.picking.getId(),
-    FOLDER_ID_INPUT_ORDERS: folders.inputOrders.getId(),
-    FOLDER_ID_INPUT_INVENTORY: folders.inputInventory.getId(),
-    FOLDER_ID_ARCHIVE: folders.archive.getId()
+    FOLDER_ID_INPUT: folders.input.getId(),
+    FOLDER_ID_PROCESSED: folders.processed.getId(),
+    FOLDER_ID_ERROR: folders.error.getId(),
+    FOLDER_ID_OUTPUT: folders.output.getId(),
+    FOLDER_ID_BACKUP: folders.backup.getId()
   };
   PropertiesService.getScriptProperties().setProperties(values, false);
   _cache.consoleSS = ss;
@@ -212,6 +215,7 @@ function ensureConsoleSheets_(ss) {
     COL.상품코드, '변동량', '변동 후 재고', COL.담당자, '사유'
   ]);
   ensureInstallSheet_(ss, CONSOLE.작업로그, ['시각', '함수', '결과', '메시지', '실행계정']);
+  ensureInstallSheet_(ss, CONSOLE.입력처리로그, INPUT_LOG_HEADERS);
 }
 
 function ensureProjectSpreadsheets_(folders, config, report) {
@@ -343,8 +347,17 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
     managed.push(['시트명', def.role, resources[def.role].sheet.getName(), '표준 업무 시트',
       function (value) { return !!resources[def.role].ss.getSheetByName(String(value || '')); }]);
   });
-  managed.push(['파라미터', 'CSV폴더ID', folders.inputOrders.getId(), '주문 CSV 업로드 폴더', validFolderId_]);
-  managed.push(['파라미터', '재고CSV폴더ID', folders.inputInventory.getId(), '카페24 재고 CSV 폴더', validFolderId_]);
+  var exactFolder = function (folder) {
+    return function (value) { return extractDriveId_(value) === folder.getId() && validFolderId_(value); };
+  };
+  managed.push(['파라미터', '통합Input폴더ID', folders.input.getId(), '유일한 입력 폴더', exactFolder(folders.input)]);
+  managed.push(['파라미터', 'Processed폴더ID', folders.processed.getId(), '정상 처리 원본', exactFolder(folders.processed)]);
+  managed.push(['파라미터', 'Error폴더ID', folders.error.getId(), '처리 실패 원본', exactFolder(folders.error)]);
+  managed.push(['파라미터', 'Output폴더ID', folders.output.getId(), '피킹 PDF 출력', exactFolder(folders.output)]);
+  managed.push(['파라미터', 'Backup폴더ID', folders.backup.getId(), '백업 폴더', exactFolder(folders.backup)]);
+  // 기존 S1/S2 수동 진입점도 통합 Input을 보도록 호환 키를 유지한다.
+  managed.push(['파라미터', 'CSV폴더ID', folders.input.getId(), '통합 Input (호환)', exactFolder(folders.input)]);
+  managed.push(['파라미터', '재고CSV폴더ID', folders.input.getId(), '통합 Input (호환)', exactFolder(folders.input)]);
 
   var defaults = [
     ['파라미터', 'CSV처리완료폴더명', '처리완료', '취입 후 CSV 이동 대상'],
@@ -352,7 +365,8 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
     ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
     ['파라미터', '예약키워드', '예약', '상품명 예약 판정 문자열 (쉼표 구분)'],
     ['파라미터', '재고경고임계치', 3, '재고현황 대시보드 경고 기준'],
-    ['파라미터', '추가투입임계(분)', 45, '주문 추가 투입 권고 기준']
+    ['파라미터', '추가투입임계(분)', 45, '주문 추가 투입 권고 기준'],
+    ['파라미터', '알림이메일', '', '입력 처리 실패 알림 수신자']
   ];
   installAliases_().forEach(function (entry) { defaults.push(['별칭', entry[0], entry[1], '']); });
 

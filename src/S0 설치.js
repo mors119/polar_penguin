@@ -141,7 +141,7 @@ function 설치_3_트리거등록(silent) {
 
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var f = t.getHandlerFunction();
-    if (['S5_1_결과반영', 'syncAndRefresh', 'syncPickingResults', 'onOpen'].indexOf(f) >= 0) {
+    if (['S5_1_결과반영', 'syncAndRefresh', 'syncPickingResults', 'processInput', 'onOpen'].indexOf(f) >= 0) {
       ScriptApp.deleteTrigger(t);
     }
   });
@@ -150,13 +150,14 @@ function 설치_3_트리거등록(silent) {
   if ([1, 5, 10, 15, 30].indexOf(주기) < 0) 주기 = 5;
 
   ScriptApp.newTrigger('syncAndRefresh').timeBased().everyMinutes(주기).create();
+  ScriptApp.newTrigger('processInput').timeBased().everyMinutes(주기).create();
 
   var 메뉴 = true;
   try { ScriptApp.newTrigger('onOpen').forSpreadsheet(ss).onOpen().create(); }
   catch (e) { 메뉴 = false; }
 
   var msg = 주기 + '분 주기 트리거를 등록했습니다.\n' +
-    '재고 반영 + 대시보드 3종 갱신이 함께 실행됩니다.\n' +
+    '통합 Input 처리 + 재고 반영 + 대시보드 갱신이 함께 실행됩니다.\n' +
     (메뉴 ? '"' + ss.getName() + '" 을 열면 메뉴가 표시됩니다.' : '⚠ 메뉴 트리거 등록 실패');
 
   if (!silent) alert_(msg);
@@ -255,9 +256,8 @@ function onOpen(e) {
     var ui = SpreadsheetApp.getUi();
     ui.createMenu('📦 피킹 운영')
       .addItem('⚙️ 시스템 설치 · 복구', 'setupSystem')
+      .addItem('📥 Input 지금 처리', 'processInput')
       .addSeparator()
-      .addItem('S1. 카페24 재고 동기화', 'S1_1_카페24재고동기화')
-      .addItem('S2. 주문 CSV 취입', 'S2_1_주문CSV취입')
       .addItem('S3. 주문 확정 (재고 검증)', 'S3_1_주문확정')
       .addItem('S4. 피킹지시 생성', 'S4_1_피킹지시생성')
       .addSeparator()

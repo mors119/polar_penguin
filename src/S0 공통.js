@@ -17,8 +17,11 @@ var CONSOLE_SS_ID = '';
 var CONSOLE = {
   설정: '설정',
   재고이동로그: '재고이동로그',
-  작업로그: '작업로그'
+  작업로그: '작업로그',
+  입력처리로그: '입력처리로그'
 };
+
+var INPUT_LOG_HEADERS = ['처리시각', '파일ID', '파일명', '체크섬', '유형', '상태', '오류코드', '메시지'];
 
 var ROLE = {
   마스터: '상품마스터',
@@ -88,6 +91,7 @@ var ENUM = {
 };
 
 var _cache = { config: null, ss: {}, consoleSS: null };
+var _scriptLockDepth = 0;
 
 /* ============================================================
  *  콘솔 스프레드시트 접근
@@ -372,9 +376,14 @@ function writeOpLog_(함수명, 결과, 메시지) {
  * ============================================================ */
 
 function withLock_(fn) {
+  if (_scriptLockDepth > 0) {
+    _scriptLockDepth++;
+    try { return fn(); } finally { _scriptLockDepth--; }
+  }
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30 * 1000)) throw new Error('다른 작업이 실행 중입니다. 30초 후 다시 시도하세요.');
-  try { return fn(); } finally { lock.releaseLock(); }
+  _scriptLockDepth = 1;
+  try { return fn(); } finally { _scriptLockDepth = 0; lock.releaseLock(); }
 }
 
 function alert_(msg) {
