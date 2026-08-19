@@ -65,7 +65,11 @@ function collectPickingStatus_() {
 }
 
 function collectOperationStatus_() {
-  var out = { latestTime: '기록 없음', latestResult: '기록 없음', warning: '없음', recentErrors: [] };
+  var out = { latestTime: '기록 없음', latestResult: '기록 없음', warning: '없음', recentErrors: [], lastBackup: '백업 없음' };
+  try {
+    var backup = PropertiesService.getScriptProperties().getProperty('최근백업일시');
+    if (backup) out.lastBackup = formatMaintenanceDate_(new Date(backup));
+  } catch (ignore) { }
   var sheet = consoleSS_().getSheetByName(CONSOLE.입력처리로그);
   if (!sheet || sheet.getLastRow() < 2) return out;
   var rows = sheet.getRange(2, 1, Math.min(sheet.getLastRow() - 1, 20), INPUT_LOG_HEADERS.length).getValues();
@@ -93,7 +97,8 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
   if (sh.getMaxColumns() < 10) sh.insertColumnsAfter(sh.getMaxColumns(), 10 - sh.getMaxColumns());
   sh.getRange(1, 1, 1, 10).merge().setValue('📊  Polar Penguin 통합 대시보드')
     .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
-  sh.getRange(2, 1, 1, 10).merge().setValue('최근 갱신 ' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss'));
+  sh.getRange(2, 1, 1, 10).merge().setValue('최근 갱신 ' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss') +
+    '  ·  최근 백업 ' + (operation.lastBackup || '백업 없음'));
   dashboardSection_(sh, 4, '입력', [['최근 처리', operation.latestTime], ['최근 결과', operation.latestResult], ['경고', operation.warning]]);
   dashboardSection_(sh, 9, '주문', [['예약', order.예약], ['출고완료', order.출고완료], ['취소', order.취소], ['전체', order.전체]]);
   dashboardSection_(sh, 14, '예약', [['예약 주문', order.예약전체], ['예약 수량', order.예약수량], ['출고 가능 주문', order.예약출고가능], ['가용 예약 SKU', order.예약출고가능SKU], ['재고 부족 주문', order.예약부족]]);

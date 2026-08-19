@@ -210,28 +210,28 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
 
   const first = context.setupSystem();
   assert.equal(properties.get('ROOT_FOLDER_ID'), root.getId());
-  assert.equal(first.folders.filter((item) => item.created).length, 4);
+  assert.equal(first.folders.filter((item) => item.created).length, 5);
   assert.deepEqual(plain(first.folders.map((item) => item.name)),
-    ['Input', 'Success', 'Error', 'Output']);
+    ['Input', 'Success', 'Error', 'Output', 'Backup']);
   assert.equal(first.spreadsheets.filter((item) => item.created).length, 1);
   assert.equal(spreadsheets.size, 1, 'regression: setup must never create five operational spreadsheets');
   assert.deepEqual(
     [...root.folders.map((folder) => folder.name), ...root.files.map((file) => file.name)].sort(),
-    ['Error', 'Input', 'Output', 'Polar Penguin', 'Success'].sort()
+    ['Backup', 'Error', 'Input', 'Output', 'Polar Penguin', 'Success'].sort()
   );
   assert.deepEqual(triggers.map((trigger) => trigger.getHandlerFunction()).sort(), ['onOpen', 'processInput']);
 
   const operationSs = spreadsheets.get(properties.get('OPERATION_SPREADSHEET_ID'));
   assert.equal(properties.get('CONSOLE_SS_ID'), operationSs.getId());
   const expectedTabs = ['📖 안내', '📊 대시보드', '상품마스터', '주문(완료)', '피킹(라인)',
-    '피킹(헤더)', '재고이동로그', '작업로그', '입력처리로그', '설정'];
+    '피킹(헤더)', '재고이동로그', '작업로그', '입력처리로그', '처리주문아카이브', '설정'];
   assert.deepEqual(operationSs.getSheets().map((sheet) => sheet.getName()), expectedTabs);
   assert.deepEqual(operationSs.getSheets().map((sheet) => sheet.getName()).sort(), expectedTabs.slice().sort());
   assert.equal(operationSs.getSheetByName('Sheet1'), null);
   assert.equal(operationSs.getSheetByName('시트1'), null);
   assert.equal(operationSs.getSheetByName('예약대기'), null);
   assert.equal(operationSs.getSheetByName('주문반려'), null);
-  for (const name of ['피킹(헤더)', '재고이동로그', '작업로그', '입력처리로그', '설정']) {
+  for (const name of ['피킹(헤더)', '재고이동로그', '작업로그', '입력처리로그', '처리주문아카이브', '설정']) {
     assert.equal(operationSs.getSheetByName(name).hidden, true, `${name} should be hidden`);
   }
   assert.equal(validationLists.some((values) => values.join(',') === 'O,X'), false);
@@ -245,17 +245,22 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   const configSheet = operationSs.getSheetByName('설정');
   const configValues = configSheet.getDataRange().getValues();
   const inputId = properties.get('FOLDER_ID_INPUT');
-  for (const key of ['통합Input폴더ID']) {
+  for (const key of ['통합Input폴더ID', '백업폴더ID']) {
     const row = configValues.find((value) => value[0] === '파라미터' && value[1] === key);
-    assert.equal(row[2], inputId);
+    assert.equal(row[2], key === '통합Input폴더ID' ? inputId : properties.get('FOLDER_ID_BACKUP'));
   }
   assert.equal(configValues.some((row) => row[1] === 'Processed폴더ID'), false);
   assert.equal(configValues.some((row) => row[1] === 'Backup폴더ID'), false);
   assert.equal(properties.has('FOLDER_ID_PROCESSED'), false);
-  assert.equal(properties.has('FOLDER_ID_BACKUP'), false);
+  assert.equal(properties.has('FOLDER_ID_BACKUP'), true);
+  assert.ok(operationSs.getSheetByName('처리주문아카이브'));
   assert.ok(operationSs.getSheetByName('입력처리로그'));
   const pollingRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '폴링주기(분)') + 1;
   configSheet.getRange(pollingRow, 3).setValue(15);
+  const retentionRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '정리보존일수') + 1;
+  const emailRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '알림이메일') + 1;
+  configSheet.getRange(retentionRow, 3).setValue(45);
+  configSheet.getRange(emailRow, 3).setValue('ops@example.com');
   configSheet.getRange(configSheet.getLastRow() + 1, 1, 1, 4)
     .setValues([['파라미터', 'Processed폴더ID', 'legacy-folder', 'legacy']]);
   properties.set('FOLDER_ID_PROCESSED', 'legacy-folder');
@@ -269,16 +274,20 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   }
   orderSheet.getRange(2, 1).setValue('ORDER-KEEP');
   operationSs.getSheetByName('상품마스터').getRange(2, 1).setValue('SKU-KEEP');
+  operationSs.getSheetByName('처리주문아카이브').getRange(2, 2).setValue('ITEM-ARCHIVE-KEEP');
 
   const second = context.setupSystem();
   assert.equal(second.folders.filter((item) => item.created).length, 0);
   assert.equal(second.spreadsheets.filter((item) => item.created).length, 0);
   assert.equal(spreadsheets.size, 1);
   assert.equal(configSheet.getRange(pollingRow, 3).getValue(), 15);
+  assert.equal(configSheet.getRange(retentionRow, 3).getValue(), 45);
+  assert.equal(configSheet.getRange(emailRow, 3).getValue(), 'ops@example.com');
   assert.equal(configSheet.getDataRange().getValues().some((row) => row[1] === 'Processed폴더ID'), false);
   assert.equal(properties.has('FOLDER_ID_PROCESSED'), false);
   assert.equal(orderSheet.getRange(2, 1).getValue(), 'ORDER-KEEP');
   assert.equal(operationSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
+  assert.equal(operationSs.getSheetByName('처리주문아카이브').getRange(2, 2).getValue(), 'ITEM-ARCHIVE-KEEP');
   assert.equal(triggers.length, 2);
   assert.equal(triggers.find((trigger) => trigger.getHandlerFunction() === 'processInput').minutes, 15);
 

@@ -55,7 +55,7 @@ function processInput() {
         recordInputLog_(file, e.inputFingerprint || '', e.inputType || INPUT_TYPE.UNKNOWN, 'ERROR', code, e.message);
         try { moveInputFile_(file, errorFolder); }
         catch (moveError) { writeOpLog_('processInput', '실패', file.getName() + ' / Error 이동 실패 / ' + moveError.message); }
-        notifyInputFailure_(file.getName(), code, e.message);
+        if (!e.systemNotified) notifyInputFailure_(file.getName(), code, e.message);
       }
     });
 
@@ -179,6 +179,13 @@ function runInputBusiness_(type, file, outputFolder) {
   } catch (e) {
     markPickingOutputState_(result.picking.지시번호, ENUM.헤더상태.출력오류);
     writeOpLog_('runInputBusiness_', '실패', result.picking.지시번호 + ' / PDF / ' + e.message);
+    sendSystemNotification_('ERROR', '피킹 PDF 생성 실패', {
+      피킹지시번호: result.picking.지시번호,
+      주문배치: result.confirm.준비주문.join(', '),
+      오류: e.message,
+      조치: '피킹지시서 조회 / 재출력에서 다시 시도하세요.'
+    });
+    e.systemNotified = true;
     throw e;
   }
   return result;
@@ -289,18 +296,8 @@ function inputBusinessMessage_(result) {
 }
 
 function notifyInputFailure_(fileName, code, message) {
-  var recipient = String(param_('알림이메일', '') || '').trim();
-  if (!recipient) {
-    writeOpLog_('processInput', '경고', '알림이메일 미설정 / ' + fileName + ' / ' + code);
-    return false;
-  }
-  var processedAt = Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss');
-  try {
-    GmailApp.sendEmail(recipient, '[Polar Penguin] Input Processing Failed',
-      '파일명: ' + fileName + '\n오류유형: ' + code + '\n오류메시지: ' + message + '\n처리시각: ' + processedAt);
-    return true;
-  } catch (e) {
-    writeOpLog_('processInput', '경고', '오류 알림 발송 실패 / ' + e.message);
-    return false;
-  }
+  return sendSystemNotification_('ERROR', 'Input 처리 실패', {
+    파일명: fileName, 오류코드: code, 오류메시지: message,
+    조치: 'Error 폴더의 원본과 시스템 상태를 확인한 뒤 필요한 경우 Input에 수정 파일을 넣으세요.'
+  }).sent;
 }

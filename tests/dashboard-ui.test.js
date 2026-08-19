@@ -79,7 +79,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
   assert.ok(menuNames.includes('📦 Polar Penguin'));
   for (const expected of ['processInput', '선택_주문취소', '예약상품_피킹관리',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '진단_시트구조',
-    '위치_미지정상품관리', 'setupSystem', '정리_로그']) {
+    '위치_미지정상품관리', 'setupSystem', '백업_및_정리', '정리_로그']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
   }
   for (const internal of ['S1_1_카페24재고동기화', 'S2_1_주문CSV취입', 'S3_1_주문확정', 'S4_1_피킹지시생성']) {
@@ -87,7 +87,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
   }
   for (const expected of ['Input 지금 처리', '피킹지시서 조회 / 재출력', '위치 미지정 상품',
     '선택 주문 취소', '예약상품 피킹 관리', '대시보드 갱신', '시스템 상태 확인',
-    '시스템 설치 / 복구', '로그 정리']) {
+    '시스템 설치 / 복구', '백업 및 정리', '로그 정리']) {
     assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
   }
   for (const internal of ['카페24 재고 동기화', '주문 CSV 취입', '주문 확정', '피킹지시 생성']) {
@@ -96,6 +96,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
 
   const allSource = fs.readdirSync(path.join(rootPath, 'src')).filter((name) => name.endsWith('.js'))
     .map((name) => fs.readFileSync(path.join(rootPath, 'src', name), 'utf8')).join('\n');
+  assert.match(allSource, /⚠ 알림이메일 미설정/);
   for (const handler of handlers) {
     assert.match(allSource, new RegExp(`function\\s+${handler.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*\\(`));
   }

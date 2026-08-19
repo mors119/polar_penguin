@@ -227,8 +227,28 @@ function reservationProductStatus_(calculated, available) {
   return calculated.waiting.length ? '주문 전체 재고 확인 필요' : '대기 없음';
 }
 
-/** 브라우저의 주문번호를 신뢰하지 않고 lock 안에서 최신 FIFO를 다시 계산한다. */
+/** 예약 FIFO 실패 알림을 한곳에서 처리하는 공개/내부 진입점. */
+function createReservationPickingBatch(sku) { return createReservationPickingBatch_(sku); }
+
 function createReservationPickingBatch_(sku) {
+  try { return createReservationPickingBatchCore_(sku); }
+  catch (e) {
+    var inventoryState = '확인 불가';
+    try {
+      var snapshot = readReservationSnapshot_(), product = snapshot.inventory[toStr_(sku)];
+      if (product) inventoryState = '가용재고 ' + product.available;
+    } catch (ignore) { }
+    sendSystemNotification_('ERROR', '예약상품 피킹 실패', {
+      선택SKU: toStr_(sku), 피킹지시번호: e.pickingInstructionNo || '생성 전 실패',
+      재고상태: inventoryState, 오류: e.message,
+      조치: '재고 상태를 확인하고 예약상품 피킹 관리에서 다시 시도하세요.'
+    });
+    throw e;
+  }
+}
+
+/** 브라우저의 주문번호를 신뢰하지 않고 lock 안에서 최신 FIFO를 다시 계산한다. */
+function createReservationPickingBatchCore_(sku) {
   sku = toStr_(sku); if (!sku) throw new Error('상품코드를 선택하세요.');
   return withLock_(function () {
     var snapshot = readReservationSnapshot_();
@@ -256,8 +276,10 @@ function createReservationPickingBatch_(sku) {
     } catch (pdfError) {
       markPickingOutputState_(picking.지시번호, ENUM.헤더상태.출력오류);
       writeOpLog_('createReservationPickingBatch_', '실패', picking.지시번호 + ' / PDF / ' + pdfError.message);
-      throw new Error('PDF 생성에 실패했습니다. 주문은 출고완료로 바뀌지 않았습니다. 피킹지시서 조회/재출력에서 ' +
-        picking.지시번호 + '을(를) 복구하세요.\n' + pdfError.message);
+      var recoveryError = new Error('PDF 생성에 실패했습니다. 주문은 출고완료로 바뀌지 않았습니다. ' +
+        '피킹지시서 조회/재출력에서 ' + picking.지시번호 + '을(를) 복구하세요.\n' + pdfError.message);
+      recoveryError.pickingInstructionNo = picking.지시번호;
+      throw recoveryError;
     }
     try { D0_대시보드전체갱신(true); } catch (dashboardError) {
       writeOpLog_('createReservationPickingBatch_', '경고', picking.지시번호 + ' / 대시보드 / ' + dashboardError.message);

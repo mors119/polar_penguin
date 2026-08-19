@@ -265,14 +265,23 @@ function 진단_시트구조() {
 
   var ss = consoleSS_();
   ['📖 안내', '📊 대시보드', CONSOLE.설정,
-   CONSOLE.재고이동로그, CONSOLE.작업로그, CONSOLE.입력처리로그].forEach(function (n) {
+   CONSOLE.재고이동로그, CONSOLE.작업로그, CONSOLE.입력처리로그, CONSOLE.처리주문아카이브].forEach(function (n) {
     out.push((ss.getSheetByName(n) ? '✅ ' : '❌ ') + '운영 탭: ' + n);
   });
 
-  out.push((ss.getSheetByName('📊 대시보드') ? '✅ ' : '❌ ') + '통합 대시보드');
+  out.push('✅ 운영 Spreadsheet: ' + ss.getName());
+  [
+    ['Input 폴더', '통합Input폴더ID'], ['Success 폴더', 'Success폴더ID'],
+    ['Error 폴더', 'Error폴더ID'], ['Output 폴더', 'Output폴더ID'], ['Backup 폴더', '백업폴더ID']
+  ].forEach(function (item) {
+    try { inputFolder_(item[1]); out.push('✅ ' + item[0]); }
+    catch (e) { out.push('❌ ' + item[0] + ': ' + e.message); }
+  });
+  out.push(toStr_(param_('알림이메일', '')) ? '✅ 알림이메일' : '⚠ 알림이메일 미설정');
 
   var trg = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
-  out.push((trg.length ? '✅ ' : '❌ ') + '트리거: ' + (trg.join(', ') || '없음'));
+  out.push((trg.indexOf('processInput') >= 0 ? '✅ ' : '❌ ') + 'processInput 트리거');
+  out.push((trg.indexOf('onOpen') >= 0 ? '✅ ' : '❌ ') + 'onOpen 트리거');
 
   var msg = out.join('\n');
   Logger.log(msg);
@@ -323,6 +332,7 @@ function onOpen(e) {
         .addItem('시스템 상태 확인', '진단_시트구조'))
       .addSubMenu(ui.createMenu('⚙ 관리')
         .addItem('시스템 설치 / 복구', 'setupSystem')
+        .addItem('백업 및 정리', '백업_및_정리')
         .addItem('로그 정리', '정리_로그'))
       .addToUi();
   } catch (err) {

@@ -243,3 +243,13 @@ test('central cancellation restores according to state and is idempotent', () =>
   context.cancelOrder_('O-1', '반품', 'TEST', { confirmReturn: true });
   assert.equal(tables[context.ROLE.마스터].rows[0][1], 10);
 });
+
+test('cancellation failure reports order context through the centralized notifier', () => {
+  const tables = cancellationTables('예약', 10, 0); installTables(tables);
+  const notices = [];
+  context.sendSystemNotification_ = (level, title, details) => { notices.push({ level, title, details }); return { sent: true }; };
+  assert.throws(() => context.cancelOrder_('MISSING', 'test', 'TEST', {}), /주문번호를 찾을 수 없습니다/);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].title, '주문 취소 실패');
+  assert.equal(notices[0].details.주문번호, 'MISSING');
+});

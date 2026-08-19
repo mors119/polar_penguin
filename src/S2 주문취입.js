@@ -49,11 +49,7 @@ function S2_1_주문CSV취입(입력파일, options) {
     var c지시번호 = col_(주문, COL.피킹지시번호, true);
     var c주문상태 = col_(주문, COL.주문상태, true);
  
-    var 기존키 = {};
-    주문.rows.forEach(function (r) {
-      var k = toStr_(r[c품목별]);
-      if (k) 기존키[k] = true;
-    });
+    var 기존키 = buildExistingItemOrderKeys_(주문, c품목별);
  
     var 텍스트열 = TEXT_COLUMNS_ORDER
       .map(function (n) { return col_(주문, n, false); })
@@ -149,6 +145,17 @@ function parseCsvFile_(file, 주문, c품목별, 기존키) {
   }
  
   return { rows: rows, 중복: 중복, 오류: 오류, 총행: parsed.length - 1, 주문번호: 주문번호 };
+}
+
+/** 활성 주문과 경량 아카이브를 합쳐 오래된 완료 주문의 재수입도 차단한다. */
+function buildExistingItemOrderKeys_(orderTable, itemColumn) {
+  var keys = {};
+  orderTable.rows.forEach(function (row) {
+    var key = toStr_(row[itemColumn]); if (key) keys[key] = true;
+  });
+  var archived = typeof getArchivedItemOrderKeys_ === 'function' ? getArchivedItemOrderKeys_() : {};
+  Object.keys(archived).forEach(function (key) { keys[key] = true; });
+  return keys;
 }
  
 function getOrCreateSubFolder_(parent, name) {
