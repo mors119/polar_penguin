@@ -93,6 +93,15 @@ test('reservation release retry reuses the existing picking instruction', () => 
   assert.equal(result.지시번호, 'PK-1');
 });
 
+test('reservation picking batches use the RES batch-number segment', () => {
+  context.param_ = () => 'PK';
+  context.Utilities = { formatDate: () => '20260819' };
+  context.tz_ = () => 'Asia/Seoul';
+  const header = { rows: [['PK-20260819-RES-001']], width: 1 };
+  assert.equal(context.nextInstructionNo_(header, 0, 'RES'), 'PK-20260819-RES-002');
+  assert.equal(context.nextInstructionNo_(header, 0, ''), 'PK-20260819-001');
+});
+
 function pickingTables(confirmations) {
   return {
     [context.ROLE.주문]: table(context.ROLE.주문,
@@ -132,6 +141,36 @@ test('picking X delegates whole-order cancellation to the shared service', () =>
   context.S5_1_결과반영();
   context.cancelOrder_ = original;
   assert.deepEqual(calls, [{ orderNo: 'O-1', reason: '재고없음', source: 'PICKING_X' }]);
+});
+
+test('one failed order in a shared reservation batch does not cancel sibling orders', () => {
+  const tables = {
+    [context.ROLE.주문]: table(context.ROLE.주문,
+      ['주문번호', '품목별 주문번호', '주문상태', '출고완료'],
+      [['A001', 'I-1', '처리완료', 0], ['A002', 'I-2', '처리완료', 0], ['A003', 'I-3', '처리완료', 0]]),
+    [context.ROLE.라인]: table(context.ROLE.라인,
+      ['주문번호', '품목별 주문번호', '상품코드', '필요수량', '확인', '실제수량', '예외사유', '담당자', '피킹지시번호', '라인상태', '처리일시'],
+      [['A001', 'I-1', 'SKU-1', 1, 'O', '', '', '', 'PK-RES-1', '미처리', ''],
+       ['A002', 'I-2', 'SKU-1', 1, 'X', '', '재고없음', '', 'PK-RES-1', '미처리', ''],
+       ['A003', 'I-3', 'SKU-1', 1, 'O', '', '', '', 'PK-RES-1', '미처리', '']]),
+    [context.ROLE.헤더]: table(context.ROLE.헤더,
+      ['피킹지시번호', '주문번호', '피킹담당자', '상태'],
+      [['PK-RES-1', 'A001', 'Kim', '대기'], ['PK-RES-1', 'A002', 'Kim', '대기'], ['PK-RES-1', 'A003', 'Kim', '대기']]),
+    [context.ROLE.마스터]: table(context.ROLE.마스터,
+      ['상품품목코드', '예약재고', '가용재고'], [['SKU-1', 3, 10]])
+  };
+  installTables(tables);
+  const original = context.cancelOrder_;
+  context.cancelOrder_ = orderNo => {
+    const row = tables[context.ROLE.주문].rows.find(item => item[0] === orderNo);
+    row[2] = '취소';
+    tables[context.ROLE.라인].rows.find(item => item[0] === orderNo)[9] = '취소';
+    return { 취소: true };
+  };
+  const result = context.S5_1_결과반영();
+  context.cancelOrder_ = original;
+  assert.deepEqual([...result.완료주문].sort(), ['A001', 'A003']);
+  assert.deepEqual(tables[context.ROLE.주문].rows.map(row => row[2]), ['출고완료', '취소', '출고완료']);
 });
 
 function cancellationTables(state, available, reserved, confirmed = '') {
