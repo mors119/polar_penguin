@@ -5,13 +5,13 @@
 | Responsibility | Classification | Result |
 |---|---|---|
 | Input polling, validation, checksum protection | AUTOMATE | `processInput` owns the complete input boundary and moves an order source to Success only after output finalization succeeds. |
-| Whole-order stock aggregation and reservation | AUTOMATE | S3 moves available stock to reserved stock exactly once for explicit new/released orders. |
+| Whole-order stock aggregation and commitment | AUTOMATE | S3 changes available stock exactly once; `재고관리=F` may naturally produce a negative net position. |
 | Picking header/line creation | AUTOMATE | S4 creates audit data once and reuses an existing instruction on retry. |
-| First successful PDF/manual printable output | AUTOMATE | `finalizePickingAfterOutput_` consumes reserved stock and completes lines, headers, and orders. |
+| First successful PDF/manual printable output | AUTOMATE | `finalizePickingAfterOutput_` completes lines, headers, and orders without another inventory mutation. |
 | Reprint | AUTOMATE | Document output only; completed state prevents inventory, status, and log mutation. |
 | Order cancellation decision and reason | KEEP_EDITABLE | Selection-based cancellation is the primary correction flow; restoration is automatic and idempotent. |
-| Reservation release decision | KEEP_EDITABLE | Operator selects a reservation product; the server calculates whole-order FIFO eligibility. |
-| Physical picking result confirmation | REMOVE | No O/X entry or S5 confirmation is required. Successful output is the commit point. |
+| Reservation release decision | KEEP_EDITABLE | Operator selects a SKU derived from waiting order rows; the server calculates whole-order FIFO eligibility. |
+| Physical picking result confirmation | REMOVE | No O/X entry or S5 confirmation is required. Successful output is the fulfillment-state point. |
 | Picking line confirmation value | INTERNAL_ONLY | O is automatically stored as historical/audit data after successful output. |
 | Inventory movement, operation and input logs | INTERNAL_ONLY | Retained for audit, diagnosis, and duplicate-movement protection. |
 | Manual S1–S5 workflow and result polling | REMOVE | Internal services remain where needed, but no manual result menu or polling trigger is installed. |

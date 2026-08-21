@@ -15,9 +15,8 @@
  *    품목코드      → 상품품목코드  (PK)
  *    상품명        → 상품명
  *    품목명        → 옵션명        (비면 '-')
- *    재고수량      → 총 보유량     (가용 = 총보유 − 예약)
+ *    재고수량      → 물리 재고 snapshot
  *    재고관리 사용 → 재고관리      (T/F)
- *    상품명에 [설정]의 예약키워드 포함 → 예약상품 = Y
  *
  *  ★ 보관위치는 창고 고유 정보이므로 절대 덮어쓰지 않는다.
  * ============================================================
@@ -93,16 +92,11 @@ function S1_1_카페24재고동기화(입력파일, silent) {
       상품명: col_(마스터, COL.상품명, true),
       옵션명: col_(마스터, COL.옵션명, false),
       상품구분: col_(마스터, '상품구분', false),
-      이미지: col_(마스터, COL.이미지, false),
       위치: col_(마스터, COL.기본보관위치, true),
       가용: col_(마스터, COL.가용재고, true),
-      예약: col_(마스터, COL.예약재고, true),
-      불량: col_(마스터, COL.불량재고, false),
-      상품상태: col_(마스터, COL.상품상태, false),
       등록일: col_(마스터, '등록일', false),
       승인자: col_(마스터, '승인자', false),
-      예약상품: col_(마스터, COL.예약상품, true),
-      재고관리: col_(마스터, COL.재고관리, false),
+      재고관리: col_(마스터, COL.재고관리, true),
       판매가: col_(마스터, COL.판매가, false),
       동기화: col_(마스터, COL.최종동기화, false)
     };
@@ -117,7 +111,8 @@ function S1_1_카페24재고동기화(입력파일, silent) {
     var now = new Date();
     var 사용자 = 사용자_();
     var 신규행 = [], 로그 = [];
-    var 요약 = { 신규: 0, 갱신: 0, 재고변동: 0, 위치없음: [], 예약전환: 0, 경고: [] };
+    var 요약 = { 신규: 0, 갱신: 0, 재고변동: 0, 위치없음: [], 경고: [] };
+    var 확정수요 = committedDemandBySku_();
     var CSV코드 = {};
 
     for (var r = 1; r < parsed.length; r++) {
@@ -134,11 +129,10 @@ function S1_1_카페24재고동기화(입력파일, silent) {
       var 재고 = toNum_(row[ci[CAFE24.열.재고수량]]);
       var 관리 = ci[CAFE24.열.재고관리] !== undefined
         ? String(row[ci[CAFE24.열.재고관리]] || '').trim().toUpperCase() : 'T';
+      if (!관리) 관리 = 'T';
       var 판매가 = ci[CAFE24.열.판매가] !== undefined ? toNum_(row[ci[CAFE24.열.판매가]]) : '';
       var 부모코드 = ci[CAFE24.열.상품코드] !== undefined
         ? String(row[ci[CAFE24.열.상품코드]] || '').trim() : '';
-
-      var 예약상품 = isPreorderName_(상품명) ? 'Y' : 'N';
 
       // ---------- 신규 등록 ----------
       if (행번호[code] === undefined) {
@@ -150,13 +144,9 @@ function S1_1_카페24재고동기화(입력파일, silent) {
         if (M.옵션명 >= 0) nr[M.옵션명] = 품목명 || '-';
         nr[M.위치] = '';                     // ★ 관리자 입력 필요
         nr[M.가용] = 재고;
-        nr[M.예약] = 0;
-        if (M.불량 >= 0) nr[M.불량] = 0;
-        if (M.상품상태 >= 0) nr[M.상품상태] = '판매중';
         if (M.등록일 >= 0) nr[M.등록일] = now;
         if (M.승인자 >= 0) nr[M.승인자] = 사용자;
-        nr[M.예약상품] = 예약상품;
-        if (M.재고관리 >= 0) nr[M.재고관리] = 관리;
+        nr[M.재고관리] = 관리;
         if (M.판매가 >= 0) nr[M.판매가] = 판매가;
         if (M.동기화 >= 0) nr[M.동기화] = now;
         신규행.push(nr);
@@ -184,22 +174,18 @@ function S1_1_카페24재고동기화(입력파일, silent) {
       if (M.옵션명 >= 0) mr[M.옵션명] = 품목명 || '-';
       if (M.관리코드 >= 0 && 부모코드) mr[M.관리코드] = 부모코드;
       if (M.판매가 >= 0) mr[M.판매가] = 판매가;
-      if (M.재고관리 >= 0) mr[M.재고관리] = 관리;
+      mr[M.재고관리] = 관리;
       if (M.동기화 >= 0) mr[M.동기화] = now;
 
-      var 이전예약상품 = toStr_(mr[M.예약상품]);
-      mr[M.예약상품] = 예약상품;
-      if (이전예약상품 && 이전예약상품 !== 예약상품) 요약.예약전환++;
-
-      // 카페24 재고수량은 창고의 총 물리재고다.
-      // S3에서 이미 확보한 예약재고를 빼야 새 주문에 사용할 수 있는 가용재고가 된다.
-      var 예약중 = toNum_(mr[M.예약]);
+      // 카페24 재고수량은 가산 delta가 아닌 물리 재고 snapshot이다.
+      // 순 재고 = snapshot - 확정되었지만 아직 출고완료가 아닌 주문 수요.
+      // 같은 snapshot을 다시 처리해도 같은 값을 계산하며, F는 결과가 음수여도 그대로 보존한다.
+      var 미완료수요 = 확정수요[code] || 0;
       var 이전가용 = toNum_(mr[M.가용]);
-      var 새가용 = 재고 - 예약중;
+      var 새가용 = netStockFromSnapshot_(재고, 미완료수요, 관리);
 
-      if (새가용 < 0) {
-        요약.경고.push(code + ': 카페24 재고 ' + 재고 + ' < 예약 ' + 예약중 + ' → 가용 0');
-        새가용 = 0;
+      if (관리 !== 'F' && 재고 - 미완료수요 < 0) {
+        요약.경고.push(code + ': 카페24 재고 ' + 재고 + ' < 확정 수요 ' + 미완료수요 + ' → 가용 0');
       }
 
       if (새가용 !== 이전가용) {
@@ -207,7 +193,7 @@ function S1_1_카페24재고동기화(입력파일, silent) {
         로그.push({
           구분: ENUM.로그구분.동기화, 피킹지시번호: '', 주문번호: '', 품목별주문번호: '',
           상품코드: code, 변동량: 새가용 - 이전가용, 변동후재고: 새가용,
-          담당자: 사용자, 사유: '카페24 동기화 (총 ' + 재고 + ' − 예약 ' + 예약중 + ')'
+          담당자: 사용자, 사유: '카페24 snapshot ' + 재고 + ' − 미완료 확정 수요 ' + 미완료수요
         });
         요약.재고변동++;
       }
@@ -224,7 +210,7 @@ function S1_1_카페24재고동기화(입력파일, silent) {
     });
 
     // ---------- 일괄 쓰기 ----------
-    [M.상품명, M.옵션명, M.가용, M.예약상품, M.관리코드, M.판매가, M.재고관리, M.동기화]
+    [M.상품명, M.옵션명, M.가용, M.관리코드, M.판매가, M.재고관리, M.동기화]
       .forEach(function (idx) {
         if (idx >= 0) writeColumn_(마스터.sheet, idx, 마스터.rows);
       });
@@ -239,7 +225,6 @@ function S1_1_카페24재고동기화(입력파일, silent) {
     var msg = '카페24 재고 동기화 완료\n파일: ' + 대상.getName() + '\n\n' +
       '신규 등록 ' + 요약.신규 + '건 / 갱신 ' + 요약.갱신 + '건 / 재고 변동 ' + 요약.재고변동 + '건';
 
-    if (요약.예약전환) msg += '\n예약상품 구분 변경 ' + 요약.예약전환 + '건';
     if (잔여.length) msg += '\n\n카페24에 없는 마스터 코드 ' + 잔여.length + '건 (그대로 유지)';
 
     if (요약.위치없음.length) {
@@ -259,6 +244,30 @@ function S1_1_카페24재고동기화(입력파일, silent) {
   });
 }
 
+/** 카페24 snapshot을 누적하지 않고 현재 순 재고로 재계산한다. */
+function netStockFromSnapshot_(physicalSnapshot, committedDemand, stockManagement) {
+  var net = toNum_(physicalSnapshot) - toNum_(committedDemand);
+  return toStr_(stockManagement).toUpperCase() === 'F' ? net : Math.max(0, net);
+}
+
+/** 재고에 이미 반영되었고 아직 출고완료/취소되지 않은 주문 수요를 SKU별로 집계한다. */
+function committedDemandBySku_() {
+  var 주문 = readTable_(ROLE.주문);
+  var O = {
+    상품코드: col_(주문, COL.상품품목코드, true), 수량: col_(주문, COL.수량, true),
+    상태: col_(주문, COL.주문상태, true), 확정일시: col_(주문, COL.확정일시, false)
+  };
+  var demand = {};
+  주문.rows.forEach(function (row) {
+    var state = toStr_(row[O.상태]);
+    if (O.확정일시 < 0 || isBlank_(row[O.확정일시])) return;
+    if (state !== ENUM.주문상태.예약 && state !== '처리완료') return;
+    var code = toStr_(row[O.상품코드]);
+    if (code) demand[code] = (demand[code] || 0) + toNum_(row[O.수량]);
+  });
+  return demand;
+}
+
 /**
  * S1_2. 보관위치가 비어 있는 상품 목록
  */
@@ -269,8 +278,7 @@ function S1_2_보관위치미지정조회() {
     상품명: col_(마스터, COL.상품명, true),
     옵션: col_(마스터, COL.옵션명, false),
     위치: col_(마스터, COL.기본보관위치, true),
-    가용: col_(마스터, COL.가용재고, true),
-    예약상품: col_(마스터, COL.예약상품, false)
+    가용: col_(마스터, COL.가용재고, true)
   };
 
   var out = [];
@@ -280,7 +288,6 @@ function S1_2_보관위치미지정조회() {
     if (!isBlank_(r[M.위치])) return;
     out.push('  행' + (i + 2) + '  ' + code +
       '  재고' + toNum_(r[M.가용]) +
-      (M.예약상품 >= 0 && toStr_(r[M.예약상품]) === 'Y' ? '  [예약]' : '') +
       '  ' + toStr_(r[M.상품명]).substring(0, 30) +
       (M.옵션 >= 0 && toStr_(r[M.옵션]) !== '-' ? ' / ' + toStr_(r[M.옵션]) : ''));
   });

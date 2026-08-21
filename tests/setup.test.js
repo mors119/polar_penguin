@@ -32,7 +32,7 @@ test('config merge adds missing values, repairs invalid managed values, and pres
   const managed = [['파일ID', '피킹헤더', 'new-id', '', (value) => value === 'valid']];
   const defaults = [
     ['파라미터', '폴링주기(분)', 5, '기본값'],
-    ['파라미터', '예약키워드', '예약', '기본값']
+    ['파라미터', '재고경고임계치', 3, '기본값']
   ];
   const result = plain(context.mergeSetupConfig_(values, managed, defaults));
   assert.deepEqual(result.updates, [{ row: 2, value: 'new-id' }]);
@@ -98,6 +98,15 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     getMaxRows() { return this.maxRows; }
     getMaxColumns() { return this.maxCols; }
     insertColumnsAfter(after, count) { this.maxCols = Math.max(this.maxCols, after + count); }
+    deleteColumn(column) {
+      const next = new Map();
+      for (const [key, value] of this.cells) {
+        const [r, c] = key.split(':').map(Number);
+        if (c < column) next.set(key, value);
+        if (c > column) next.set(`${r}:${c - 1}`, value);
+      }
+      this.cells = next;
+    }
     deleteRow(row) {
       const next = new Map();
       for (const [key, value] of this.cells) {
@@ -235,7 +244,6 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     assert.equal(operationSs.getSheetByName(name).hidden, true, `${name} should be hidden`);
   }
   assert.equal(validationLists.some((values) => values.join(',') === 'O,X'), false);
-  assert.equal(validationLists.some((values) => values.join(',') === '재고없음,불량재고'), false);
   assert.ok(validationLists.some((values) => values.join(',') === '예약,출고완료,취소'));
   assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input에 파일 넣기/);
   const pickingHeaderColumns = operationSs.getSheetByName('피킹(헤더)').getDataRange().getValues()[0];
@@ -263,6 +271,10 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   configSheet.getRange(emailRow, 3).setValue('ops@example.com');
   configSheet.getRange(configSheet.getLastRow() + 1, 1, 1, 4)
     .setValues([['파라미터', 'Processed폴더ID', 'legacy-folder', 'legacy']]);
+  configSheet.getRange(configSheet.getLastRow() + 1, 1, 2, 4).setValues([
+    ['파라미터', '예약키워드', '예약', 'legacy'],
+    ['별칭', '예약재고', '예약,확보재고', 'legacy']
+  ]);
   properties.set('FOLDER_ID_PROCESSED', 'legacy-folder');
 
   const orderSheet = operationSs.getSheetByName('주문(완료)');
@@ -274,6 +286,15 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   }
   orderSheet.getRange(2, 1).setValue('ORDER-KEEP');
   operationSs.getSheetByName('상품마스터').getRange(2, 1).setValue('SKU-KEEP');
+  const masterSheet = operationSs.getSheetByName('상품마스터');
+  const firstMasterHeaders = masterSheet.getDataRange().getValues()[0];
+  const availableColumn = firstMasterHeaders.indexOf('가용재고') + 1;
+  masterSheet.getRange(2, availableColumn).setValue(90);
+  const legacyStart = masterSheet.getLastColumn() + 1;
+  masterSheet.getRange(1, legacyStart, 1, 6)
+    .setValues([['이미지', '예약재고', '상품상태', '예약상품', '불량재고', '사용자필드']]);
+  masterSheet.getRange(2, legacyStart, 1, 6)
+    .setValues([['legacy.jpg', 10, '판매중', 'Y', 2, 'KEEP-ME']]);
   operationSs.getSheetByName('처리주문아카이브').getRange(2, 2).setValue('ITEM-ARCHIVE-KEEP');
 
   const second = context.setupSystem();
@@ -284,9 +305,18 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.equal(configSheet.getRange(retentionRow, 3).getValue(), 45);
   assert.equal(configSheet.getRange(emailRow, 3).getValue(), 'ops@example.com');
   assert.equal(configSheet.getDataRange().getValues().some((row) => row[1] === 'Processed폴더ID'), false);
+  assert.equal(configSheet.getDataRange().getValues().some((row) => row[1] === '예약키워드'), false);
+  assert.equal(configSheet.getDataRange().getValues().some((row) => row[0] === '별칭' && row[1] === '예약재고'), false);
   assert.equal(properties.has('FOLDER_ID_PROCESSED'), false);
   assert.equal(orderSheet.getRange(2, 1).getValue(), 'ORDER-KEEP');
   assert.equal(operationSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
+  const migratedMaster = operationSs.getSheetByName('상품마스터').getDataRange().getValues();
+  for (const removed of ['이미지', '예약재고', '상품상태', '예약상품', '불량재고']) {
+    assert.equal(migratedMaster[0].includes(removed), false, `${removed} should be migrated away`);
+  }
+  assert.equal(migratedMaster[1][migratedMaster[0].indexOf('가용재고')], 90,
+    'old available already represents the committed net position');
+  assert.equal(migratedMaster[1][migratedMaster[0].indexOf('사용자필드')], 'KEEP-ME');
   assert.equal(operationSs.getSheetByName('처리주문아카이브').getRange(2, 2).getValue(), 'ITEM-ARCHIVE-KEEP');
   assert.equal(triggers.length, 2);
   assert.equal(triggers.find((trigger) => trigger.getHandlerFunction() === 'processInput').minutes, 15);

@@ -1,9 +1,9 @@
 /**
  * S5. 출력 성공 후 fulfillment 최종 확정.
  *
- * S3가 이미 가용재고를 줄이고 예약재고를 늘렸으므로 여기서는 예약재고만
- * 소진한다. 피킹지시번호와 주문/라인 상태가 idempotency 표식이며, 재출력은
- * 이 함수를 다시 호출해도 재고나 로그를 다시 만들지 않는다.
+ * S3가 가용재고를 이미 한 번 차감했으므로 여기서는 재고를 변경하지 않는다.
+ * 피킹지시번호와 주문/라인 상태가 idempotency 표식이며 재출력도 출력 외의
+ * 변경을 만들지 않는다.
  */
 function finalizePickingAfterOutput_(instructionNo, options) {
   options = options || {};
@@ -12,7 +12,7 @@ function finalizePickingAfterOutput_(instructionNo, options) {
     if (!instructionNo) throw new Error('피킹지시번호가 없습니다.');
 
     var 주문 = readTable_(ROLE.주문), 라인 = readTable_(ROLE.라인);
-    var 헤더 = readTable_(ROLE.헤더), 마스터 = readTable_(ROLE.마스터);
+    var 헤더 = readTable_(ROLE.헤더);
     var O = {
       주문번호: col_(주문, COL.주문번호, true), 품목별: col_(주문, COL.품목별주문번호, true),
       상품코드: col_(주문, COL.상품품목코드, true), 수량: col_(주문, COL.수량, true),
@@ -32,11 +32,6 @@ function finalizePickingAfterOutput_(instructionNo, options) {
       상태: col_(헤더, COL.상태, true), 지시: col_(헤더, COL.피킹지시번호, true),
       출력일시: col_(헤더, COL.출력일시, false)
     };
-    var M = {
-      코드: col_(마스터, COL.상품품목코드, true), 예약: col_(마스터, COL.예약재고, true),
-      가용: col_(마스터, COL.가용재고, true)
-    };
-
     var selectedOrders = null;
     if (options.orderNos && options.orderNos.length) {
       selectedOrders = {};
@@ -65,7 +60,7 @@ function finalizePickingAfterOutput_(instructionNo, options) {
       if (no) (lineRows[no] = lineRows[no] || []).push(idx);
     });
 
-    var targetOrders = [], required = {};
+    var targetOrders = [];
     Object.keys(headerOrders).forEach(function (no) {
       var indexes = orderRows[no] || [], lines = lineRows[no] || [];
       if (!indexes.length) throw new Error('피킹 주문을 찾을 수 없습니다: ' + no);
@@ -79,7 +74,7 @@ function finalizePickingAfterOutput_(instructionNo, options) {
       indexes.forEach(function (idx) {
         var row = 주문.rows[idx];
         if (toStr_(row[O.지시]) !== instructionNo) throw new Error('주문과 피킹지시 연결이 다릅니다: ' + no);
-        if (O.확정일시 < 0 || isBlank_(row[O.확정일시])) throw new Error('예약재고 확보 기록이 없습니다: ' + no);
+        if (O.확정일시 < 0 || isBlank_(row[O.확정일시])) throw new Error('재고 확정 기록이 없습니다: ' + no);
       });
       var ordered = {}, picked = {};
       indexes.forEach(function (idx) {
@@ -97,7 +92,6 @@ function finalizePickingAfterOutput_(instructionNo, options) {
       Object.keys(ordered).concat(Object.keys(picked)).forEach(function (code) { skus[code] = true; });
       Object.keys(skus).forEach(function (code) {
         if (ordered[code] !== picked[code]) throw new Error('주문/피킹 수량이 다릅니다: ' + no + ' / ' + code);
-        required[code] = (required[code] || 0) + picked[code];
       });
       targetOrders.push(no);
     });
@@ -106,30 +100,13 @@ function finalizePickingAfterOutput_(instructionNo, options) {
       return { 이미완료: true, 지시번호: instructionNo, 완료주문: [], 차감라인: 0, 차감수량: 0 };
     }
 
-    var masterIndex = {}, reserved = [];
-    마스터.rows.forEach(function (row, idx) {
-      masterIndex[toStr_(row[M.코드])] = idx; reserved[idx] = toNum_(row[M.예약]);
-    });
-    Object.keys(required).forEach(function (code) {
-      var idx = masterIndex[code];
-      if (idx === undefined) throw new Error('상품마스터에 없는 피킹 상품입니다: ' + code);
-      if (reserved[idx] < required[code]) {
-        throw new Error('예약재고가 부족합니다: ' + code + ' / 필요 ' + required[code] + ' / 예약 ' + reserved[idx]);
-      }
-    });
-
-    var now = new Date(), actor = 사용자_(), logs = [], lineCount = 0, quantity = 0;
-    Object.keys(required).forEach(function (code) { reserved[masterIndex[code]] -= required[code]; });
+    var now = new Date(), lineCount = 0, quantity = 0;
     targetOrders.forEach(function (no) {
       (lineRows[no] || []).forEach(function (idx) {
-        var row = 라인.rows[idx], qty = toNum_(row[L.필요]), code = toStr_(row[L.상품코드]);
+        var row = 라인.rows[idx], qty = toNum_(row[L.필요]);
         row[L.확인] = ENUM.확인.정상; row[L.실제] = qty;
         row[L.상태] = ENUM.라인상태.완료; row[L.처리일시] = now;
         if (L.담당자 >= 0 && workers[no]) row[L.담당자] = workers[no];
-        logs.push({ 구분: ENUM.로그구분.출고, 피킹지시번호: instructionNo, 주문번호: no,
-          품목별주문번호: toStr_(row[L.품목별]), 상품코드: code, 변동량: -qty,
-          변동후재고: toNum_(마스터.rows[masterIndex[code]][M.가용]), 담당자: workers[no] || actor,
-          사유: '출력 성공 · 예약재고 소진' });
         lineCount++; quantity += qty;
       });
       (headerRows[no] || []).forEach(function (idx) {
@@ -155,10 +132,6 @@ function finalizePickingAfterOutput_(instructionNo, options) {
       writeColumn_(주문.sheet, O.상태, 주문.rows); writeColumn_(주문.sheet, O.출고, 주문.rows);
       if (O.대기사유 >= 0) writeColumn_(주문.sheet, O.대기사유, 주문.rows);
     }
-    if (마스터.rows.length) {
-      마스터.sheet.getRange(2, M.예약 + 1, reserved.length, 1).setValues(reserved.map(function (v) { return [v]; }));
-    }
-    writeStockLog_(logs);
     writeOpLog_('finalizePickingAfterOutput_', '성공', instructionNo + ' / 주문 ' + targetOrders.length + ' / 수량 ' + quantity);
     if (options.refresh !== false) try { D0_대시보드전체갱신(true); } catch (ignore) { }
     return { 이미완료: false, 지시번호: instructionNo, 완료주문: targetOrders, 차감라인: lineCount, 차감수량: quantity };

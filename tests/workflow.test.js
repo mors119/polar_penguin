@@ -35,52 +35,50 @@ function installTables(tables) {
   return stockLogs;
 }
 
-function reservationTables(quantity = 8, available = 10, preorder = 'N') {
+function reservationTables(quantity = 8, available = 10, managed = 'T') {
   return {
     [context.ROLE.주문]: table(context.ROLE.주문,
       ['주문번호', '상품품목코드', '수량', '주문상태', '확정일시', '대기사유'],
       [['O-1', 'SKU-1', 3, '예약', '', ''], ['O-1', 'SKU-1', quantity - 3, '예약', '', '']]),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
-      ['상품품목코드', '가용재고', '예약재고', '상품상태', '예약상품'],
-      [['SKU-1', available, 0, '판매중', preorder]])
+      ['상품품목코드', '가용재고', '재고관리'],
+      [['SKU-1', available, managed]])
   };
 }
 
-test('normal order aggregates duplicate SKU demand and reserves inventory exactly once', () => {
+test('normal managed order aggregates duplicate SKU demand and commits inventory exactly once', () => {
   const tables = reservationTables();
   const logs = installTables(tables);
   const first = context.S3_1_주문확정(['O-1'], { silent: true });
   assert.equal(first.준비, 1);
   assert.equal(tables[context.ROLE.마스터].rows[0][1], 2);
-  assert.equal(tables[context.ROLE.마스터].rows[0][2], 8);
   assert.equal(logs.length, 1);
   const second = context.S3_1_주문확정(['O-1'], { silent: true });
   assert.equal(second.준비, 1);
   assert.equal(tables[context.ROLE.마스터].rows[0][1], 2);
-  assert.equal(tables[context.ROLE.마스터].rows[0][2], 8);
-  assert.equal(logs.length, 1, 'retry must not reserve twice');
+  assert.equal(logs.length, 1, 'retry must not commit twice');
 });
 
-test('insufficient or preorder order remains reservation without inventory mutation', () => {
-  for (const tables of [reservationTables(12, 10, 'N'), reservationTables(2, 10, 'Y')]) {
-    installTables(tables);
-    const result = context.S3_1_주문확정(['O-1'], { silent: true });
-    assert.equal(result.예약, 1);
-    assert.equal(tables[context.ROLE.마스터].rows[0][1], 10);
-    assert.equal(tables[context.ROLE.마스터].rows[0][2], 0);
-  }
+test('insufficient managed order keeps the existing reservation behavior without inventory mutation', () => {
+  const tables = reservationTables(12, 10, 'T');
+  installTables(tables);
+  const result = context.S3_1_주문확정(['O-1'], { silent: true });
+  assert.equal(result.예약, 1);
+  assert.equal(tables[context.ROLE.마스터].rows[0][1], 10);
 });
 
-test('manual reservation release requires complete stock and then reserves once', () => {
-  const insufficient = reservationTables(12, 10, 'Y');
-  installTables(insufficient);
-  assert.equal(context.S3_1_주문확정(['O-1'], { manualRelease: true, silent: true }).준비, 0);
-  assert.deepEqual([...insufficient[context.ROLE.마스터].rows[0].slice(1, 3)], [10, 0]);
-
-  const sufficient = reservationTables(8, 10, 'Y');
-  installTables(sufficient);
-  assert.equal(context.S3_1_주문확정(['O-1'], { manualRelease: true, silent: true }).준비, 1);
-  assert.deepEqual([...sufficient[context.ROLE.마스터].rows[0].slice(1, 3)], [2, 8]);
+test('unmanaged product demand can move available inventory below zero and remains idempotent', () => {
+  const tables = reservationTables(30, 0, 'F');
+  tables[context.ROLE.주문].rows.push(['O-2', 'SKU-1', 20, '예약', '', '']);
+  installTables(tables);
+  assert.equal(context.S3_1_주문확정(['O-1'], { silent: true }).준비, 1);
+  assert.equal(tables[context.ROLE.마스터].rows[0][1], -30);
+  context.S3_1_주문확정(['O-1'], { silent: true });
+  assert.equal(tables[context.ROLE.마스터].rows[0][1], -30);
+  assert.equal(context.S3_1_주문확정(['O-2'], { silent: true }).준비, 1);
+  assert.equal(tables[context.ROLE.마스터].rows[0][1], -50);
+  assert.deepEqual(tables[context.ROLE.주문].rows.map(row => row[3]), ['예약', '예약', '예약'],
+    'negative inventory is not shipment completion');
 });
 
 test('reservation release retry reuses the existing picking instruction', () => {
@@ -115,27 +113,26 @@ function pickingTables() {
     [context.ROLE.헤더]: table(context.ROLE.헤더,
       ['피킹지시번호', '주문번호', '피킹담당자', '상태', '출력일시'], [['PK-1', 'O-1', 'Kim', '대기', '']]),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
-      ['상품품목코드', '예약재고', '가용재고'], [['SKU-1', 10, 90]])
+      ['상품품목코드', '가용재고'], [['SKU-1', 90]])
   };
 }
 
-test('successful output auto-completes without manual O and consumes only reserved inventory once', () => {
+test('successful output auto-completes without another inventory mutation', () => {
   const tables = pickingTables();
   const logs = installTables(tables);
   const result = context.finalizePickingAfterOutput_('PK-1');
   assert.deepEqual([...result.완료주문], ['O-1']);
-  assert.equal(tables[context.ROLE.마스터].rows[0][1], 0);
-  assert.equal(tables[context.ROLE.마스터].rows[0][2], 90, 'available stock must not be decremented twice');
+  assert.equal(tables[context.ROLE.마스터].rows[0][1], 90, 'available stock must not be decremented twice');
   assert.equal(tables[context.ROLE.주문].rows[0][4], '출고완료');
   assert.deepEqual(tables[context.ROLE.라인].rows.map((row) => [row[4], row[5], row[9]]),
     [['O', 4, '완료'], ['O', 6, '완료']]);
   assert.equal(tables[context.ROLE.헤더].rows[0][3], '완료');
-  assert.equal(logs.length, 2);
+  assert.equal(logs.length, 0);
 
   const reprint = context.finalizePickingAfterOutput_('PK-1');
   assert.equal(reprint.이미완료, true);
-  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [0, 90]);
-  assert.equal(logs.length, 2, 'reprint must not consume inventory or duplicate shipment logs');
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [90]);
+  assert.equal(logs.length, 0, 'reprint must not consume inventory');
 });
 
 test('PDF failure preserves reservation and successful retry finalizes exactly once', () => {
@@ -161,14 +158,14 @@ test('PDF failure preserves reservation and successful retry finalizes exactly o
   } }) }) };
 
   assert.throws(() => context.S9_피킹PDF생성('PK-1', outputRoot), /render failed/);
-  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [10, 90]);
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [90]);
   assert.equal(tables[context.ROLE.주문].rows[0][4], '예약');
 
   fail = false;
   context.S9_피킹PDF생성('PK-1', outputRoot);
-  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [0, 90]);
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [90]);
   assert.equal(tables[context.ROLE.주문].rows[0][4], '출고완료');
-  assert.equal(logs.length, 2);
+  assert.equal(logs.length, 0);
 });
 
 test('picking X delegates whole-order cancellation to the shared service', () => {
@@ -197,23 +194,23 @@ test('reservation FIFO output finalizes selected batch orders and leaves unselec
       ['피킹지시번호', '주문번호', '피킹담당자', '상태', '출력일시'],
       [['PK-RES-1', 'A001', 'Kim', '대기', ''], ['PK-RES-1', 'A002', 'Kim', '대기', '']]),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
-      ['상품품목코드', '예약재고', '가용재고'], [['SKU-1', 90, 10]])
+      ['상품품목코드', '가용재고'], [['SKU-1', 10]])
   };
   const logs = installTables(tables);
   context.finalizePickingAfterOutput_('PK-RES-1');
-  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [0, 10]);
+  assert.deepEqual(tables[context.ROLE.마스터].rows[0].slice(1), [10]);
   assert.deepEqual(tables[context.ROLE.주문].rows.map(row => row[4]), ['출고완료', '출고완료', '예약']);
   context.finalizePickingAfterOutput_('PK-RES-1');
-  assert.equal(logs.length, 2, 'reservation batch reprint must be inventory-idempotent');
+  assert.equal(logs.length, 0, 'reservation batch reprint must be inventory-idempotent');
 });
 
-function cancellationTables(state, available, reserved, confirmed = '') {
+function cancellationTables(state, available, confirmed = '') {
   return {
     [context.ROLE.주문]: table(context.ROLE.주문,
       ['주문번호', '품목별 주문번호', '상품품목코드', '수량', '주문상태', '출고완료', '취소사유', '취소일시', '취소경로', '확정일시', '대기사유', '피킹지시번호'],
       [['O-1', 'I-1', 'SKU-1', 2, state, state === '출고완료' ? 1 : 0, '', '', '', confirmed, '', 'PK-1']]),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
-      ['상품품목코드', '가용재고', '예약재고'], [['SKU-1', available, reserved]]),
+      ['상품품목코드', '가용재고'], [['SKU-1', available]]),
     [context.ROLE.헤더]: table(context.ROLE.헤더,
       ['피킹지시번호', '주문번호', '상태'], [['PK-1', 'O-1', state === '출고완료' ? '완료' : '대기']]),
     [context.ROLE.라인]: table(context.ROLE.라인,
@@ -223,17 +220,17 @@ function cancellationTables(state, available, reserved, confirmed = '') {
 }
 
 test('central cancellation restores according to state and is idempotent', () => {
-  let tables = cancellationTables('예약', 10, 0); installTables(tables);
+  let tables = cancellationTables('예약', 10); installTables(tables);
   context.cancelOrder_('O-1', '고객 요청', 'TEST', {});
-  assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10, 0]);
+  assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10]);
 
-  tables = cancellationTables('예약', 8, 2, new Date()); installTables(tables);
+  tables = cancellationTables('예약', 8, new Date()); installTables(tables);
   context.cancelOrder_('O-1', '고객 요청', 'TEST', {});
-  assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10, 0]);
+  assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10]);
   context.cancelOrder_('O-1', '고객 요청', 'TEST', {});
-  assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10, 0]);
+  assert.deepEqual([...tables[context.ROLE.마스터].rows[0].slice(1)], [10]);
 
-  tables = cancellationTables('출고완료', 8, 0); installTables(tables);
+  tables = cancellationTables('출고완료', 8); installTables(tables);
   const warning = context.cancelOrder_('O-1', '반품', 'TEST', {});
   assert.equal(warning.확인필요, true);
   assert.match(warning.메시지, /피킹지시서가 출력되어 출고 처리된 주문/);
@@ -245,7 +242,7 @@ test('central cancellation restores according to state and is idempotent', () =>
 });
 
 test('cancellation failure reports order context through the centralized notifier', () => {
-  const tables = cancellationTables('예약', 10, 0); installTables(tables);
+  const tables = cancellationTables('예약', 10); installTables(tables);
   const notices = [];
   context.sendSystemNotification_ = (level, title, details) => { notices.push({ level, title, details }); return { sent: true }; };
   assert.throws(() => context.cancelOrder_('MISSING', 'test', 'TEST', {}), /주문번호를 찾을 수 없습니다/);

@@ -148,10 +148,9 @@ function installResourceDefinitions_() {
   return [
     {
       role: ROLE.마스터, sheetName: '상품마스터',
-      headers: [COL.상품품목코드, COL.상품명, COL.옵션명, COL.이미지,
-        COL.가용재고, COL.예약재고, COL.상품상태, COL.예약상품,
-        COL.재고관리, COL.판매가, COL.최종동기화,
-        COL.기본보관위치, COL.불량재고, '창고메모']
+      headers: [COL.상품품목코드, COL.상품명, COL.옵션명,
+        COL.가용재고, COL.재고관리, COL.판매가, COL.최종동기화,
+        COL.기본보관위치, '창고메모']
     },
     {
       role: ROLE.주문, sheetName: '주문(완료)',
@@ -190,7 +189,7 @@ function installAliases_() {
     ['보관위치', '기본보관위치,로케이션,위치'],
     ['옵션', '옵션명'], ['옵션명', '옵션'],
     ['수량', '주문수량'], ['필요수량', '주문수량,지시수량'],
-    ['예약재고', '예약,확보재고'], ['담당자', '피킹담당자,작업자']
+    ['담당자', '피킹담당자,작업자']
   ];
 }
 
@@ -346,10 +345,10 @@ function renderGuideSheet_(ss, folders) {
 
   var rows = [
     ['1. 파일 넣기', '주문 또는 재고 파일을 Drive의 Input 폴더에 업로드합니다. 파일 종류를 구분할 필요가 없습니다.'],
-    ['2. 자동 처리', '시스템이 유형 판별, 검증, 재고/주문 처리, 재고 예약, 피킹 생성, PDF 생성, Success 이동을 자동 실행합니다.'],
+    ['2. 자동 처리', '시스템이 유형 판별, 검증, 재고/주문 처리, 재고 확정, 피킹 생성, PDF 생성, Success 이동을 자동 실행합니다.'],
     ['3. 피킹/포장', 'PDF의 「창고 피킹 요약」에서 상품별 총수량을 피킹하고, 「주문별 포장 / 송장 확인」에서 고객정보와 송장을 대조해 포장합니다.'],
-    ['4. 자동 출고 반영', 'PDF가 준비되면 예약재고가 자동 소진되고 피킹 라인/헤더와 주문이 출고완료로 바뀝니다.'],
-    ['5. 예약 주문', '재고 입고 후 「예약상품 피킹 관리」에서 상품을 선택합니다. FIFO 대상의 PDF에서 상품 총수량을 피킹하고 주문별로 포장합니다.'],
+    ['4. 자동 출고 반영', 'PDF가 준비되면 피킹 라인/헤더와 주문이 출고완료로 바뀝니다. 재고는 주문 확정 시 한 번만 반영됩니다.'],
+    ['5. 예약 주문', '재고 입고 후 「예약 주문 피킹 관리」에서 대기 주문의 상품을 선택합니다. FIFO 대상의 PDF에서 상품 총수량을 피킹하고 주문별로 포장합니다.'],
     ['6. 위치 관리', '대시보드의 위치 미지정 경고를 확인하고 「📍 위치 관리 → 위치 미지정 상품」에서 위치를 입력해 저장합니다.'],
     ['7. 취소/오류', '문제가 있으면 주문을 선택해 취소합니다. 시스템이 출고 또는 예약 상태에 맞춰 재고를 한 번만 복원합니다.'],
     ['8. 백업 및 정리', '월 1회 또는 필요할 때 「⚙ 관리 → 백업 및 정리」를 실행합니다. 전체 Spreadsheet 백업이 검증된 뒤 오래된 완료 데이터와 Success/Error/Output 파일을 정리하고 결과 이메일을 보냅니다. 백업 실패 시 아무것도 삭제하지 않습니다.'],
@@ -430,7 +429,6 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   var defaults = [
     ['파라미터', '폴링주기(분)', 5, '변경 후 setupSystem 재실행'],
     ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
-    ['파라미터', '예약키워드', '예약', '상품명 예약 판정 문자열 (쉼표 구분)'],
     ['파라미터', '재고경고임계치', 3, '통합 대시보드 재고 경고 기준'],
     ['파라미터', '알림이메일', '', '시스템 오류 및 유지보수 알림 수신자'],
     ['파라미터', '정리보존일수', 30, '완료 데이터와 Success/Error/Output 보존 일수']
@@ -458,17 +456,19 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   report.configuration.push('Folder IDs registered');
 }
 
-/** 더 이상 읽지 않는 다중 입력/Processed/영문 Backup 설정 행만 제거한다. */
+/** 더 이상 읽지 않는 레거시 설정과 별칭 행을 제거한다. */
 function removeLegacySetupConfig_(sheet) {
   if (!sheet || sheet.getLastRow() < 2) return 0;
   var legacy = {
-    Processed폴더ID: true, Backup폴더ID: true, CSV폴더ID: true,
-    재고CSV폴더ID: true, CSV처리완료폴더명: true, '추가투입임계(분)': true
+    '파라미터|Processed폴더ID': true, '파라미터|Backup폴더ID': true, '파라미터|CSV폴더ID': true,
+    '파라미터|재고CSV폴더ID': true, '파라미터|CSV처리완료폴더명': true,
+    '파라미터|추가투입임계(분)': true, '파라미터|예약키워드': true, '별칭|예약재고': true
   };
   var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
   var removed = 0;
   for (var i = values.length - 1; i >= 0; i--) {
-    if (String(values[i][0] || '').trim() === '파라미터' && legacy[String(values[i][1] || '').trim()]) {
+    var section = String(values[i][0] || '').trim(), key = String(values[i][1] || '').trim();
+    if (legacy[section + '|' + key]) {
       sheet.deleteRow(i + 2);
       removed++;
     }

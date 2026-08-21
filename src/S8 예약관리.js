@@ -1,26 +1,23 @@
 /**
- * S8. 예약상품 피킹 관리.
+ * S8. 예약 주문 피킹 관리.
  *
- * 예약 주문은 고객이 아니라 주문번호가 처리 단위다. 화면은 예약상품 SKU만 선택하며,
+ * 예약 주문은 고객이 아니라 주문번호가 처리 단위다. 화면은 대기 주문에 등장한 SKU를 선택하며,
  * 서버가 주문일시 FIFO와 주문 전체 재고를 계산한다. 미리보기는 읽기 전용이고 실제
  * 생성 시에는 lock 안에서 주문/재고를 다시 읽어 같은 계산을 수행한다.
  */
 
-function 예약상품_피킹관리() {
+function 예약_주문피킹관리() {
   var html = HtmlService.createHtmlOutputFromFile('ReservationPicking').setWidth(1180).setHeight(760);
-  SpreadsheetApp.getUi().showModalDialog(html, '예약상품 피킹 관리');
+  SpreadsheetApp.getUi().showModalDialog(html, '예약 주문 피킹 관리');
 }
-
-/** 기존 설치/북마크 호환용. 주문 행 선택 방식은 더 이상 사용하지 않는다. */
-function 예약_주문피킹서생성() { return 예약상품_피킹관리(); }
 
 function getReservationProductSummary_() {
-  return reservationProductSummaries_(readReservationSnapshot_());
+  return reservationSkuSummaries_(readReservationSnapshot_());
 }
 
-function reservationProductSummaries_(snapshot) {
+function reservationSkuSummaries_(snapshot) {
   var summaries = [];
-  Object.keys(snapshot.reservationProducts).sort().forEach(function (sku) {
+  Object.keys(snapshot.candidateSkus).sort().forEach(function (sku) {
     var demandOrders = snapshot.orders.filter(function (order) { return order.required[sku] > 0; });
     if (!demandOrders.length) return;
     var calculated = calculateReservationBatch_(sku, snapshot.inventory, demandOrders);
@@ -31,7 +28,7 @@ function reservationProductSummaries_(snapshot) {
       reservationQuantity: demandOrders.reduce(function (sum, order) { return sum + order.required[sku]; }, 0),
       available: product.available, releasableOrderCount: calculated.selected.length,
       releasableQuantity: calculated.targetAllocated, remaining: calculated.remaining[sku] || 0,
-      status: reservationProductStatus_(calculated, product.available)
+      status: reservationSkuStatus_(calculated, product.available)
     });
   });
   summaries.sort(function (a, b) {
@@ -45,20 +42,20 @@ function getReservationProductPreview_(sku) {
   sku = toStr_(sku);
   if (!sku) throw new Error('상품코드를 선택하세요.');
   var snapshot = readReservationSnapshot_();
-  if (!snapshot.reservationProducts[sku]) throw new Error('예약상품이 아닙니다: ' + sku);
+  if (!snapshot.candidateSkus[sku]) throw new Error('대기 주문에 없는 상품입니다: ' + sku);
   return buildReservationPreview_(sku, snapshot);
 }
 
 /**
  * Apps Script 서비스에 의존하지 않는 FIFO 계산기.
- * inventory: SKU -> {available, name, option, disabled}
+ * inventory: SKU -> {available, name, option, managed}
  * orders: [{orderNo, orderDate, itemOrderNo, required:{SKU:qty}}]
  */
 function calculateReservationBatch_(targetSku, inventory, orders) {
   targetSku = String(targetSku || '').trim();
   var remaining = {}, selected = [], waiting = [], stopped = false;
   Object.keys(inventory || {}).forEach(function (sku) {
-    remaining[sku] = Math.max(0, Number(inventory[sku].available) || 0);
+    remaining[sku] = Number(inventory[sku].available) || 0;
   });
   var candidates = (orders || []).filter(function (order) {
     return order && order.required && Number(order.required[targetSku]) > 0;
@@ -71,7 +68,8 @@ function calculateReservationBatch_(targetSku, inventory, orders) {
         'FIFO 대기: 앞선 주문의 ' + targetSku + ' 재고 부족', [{ sku: targetSku, type: 'FIFO' }]));
       return;
     }
-    if ((remaining[targetSku] || 0) < targetRequired) {
+    var targetItem = inventory[targetSku];
+    if (!targetItem || (targetItem.managed !== false && (remaining[targetSku] || 0) < targetRequired)) {
       waiting.push(reservationWait_(order, targetRequired,
         targetSku + ' 재고 부족: 필요 ' + targetRequired + ' / 가용 ' + (remaining[targetSku] || 0),
         [{ sku: targetSku, required: targetRequired, available: remaining[targetSku] || 0, type: 'TARGET' }]));
@@ -84,8 +82,7 @@ function calculateReservationBatch_(targetSku, inventory, orders) {
       if (sku === targetSku) return;
       var required = Number(order.required[sku]) || 0, item = inventory[sku];
       if (!item) { otherShortages.push(sku + ' 미등록'); shortageDetails.push({ sku: sku, type: 'MISSING' }); }
-      else if (item.disabled) { otherShortages.push(sku + ' 사용중지'); shortageDetails.push({ sku: sku, type: 'DISABLED' }); }
-      else if ((remaining[sku] || 0) < required) {
+      else if (item.managed !== false && (remaining[sku] || 0) < required) {
         otherShortages.push(sku + ' 필요 ' + required + ' / 가용 ' + (remaining[sku] || 0));
         shortageDetails.push({ sku: sku, required: required, available: remaining[sku] || 0, type: 'OTHER' });
       }
@@ -170,22 +167,21 @@ function readReservationSnapshot_() {
   var M = {
     sku: col_(master, COL.상품품목코드, true), name: col_(master, COL.상품명, true),
     option: col_(master, COL.옵션명, false), available: col_(master, COL.가용재고, true),
-    reservationProduct: col_(master, COL.예약상품, false), state: col_(master, COL.상품상태, false)
+    managed: col_(master, COL.재고관리, true)
   };
-  var inventory = {}, reservationProducts = {};
+  var inventory = {}, candidateSkus = {};
   master.rows.forEach(function (row) {
     var sku = toStr_(row[M.sku]); if (!sku) return;
     inventory[sku] = { available: toNum_(row[M.available]), name: toStr_(row[M.name]),
       option: M.option >= 0 ? toStr_(row[M.option]) : '',
-      disabled: M.state >= 0 && toStr_(row[M.state]) === '사용중지' };
-    if (M.reservationProduct >= 0 && toStr_(row[M.reservationProduct]).toUpperCase() === 'Y') reservationProducts[sku] = true;
+      managed: toStr_(row[M.managed]).toUpperCase() !== 'F' };
   });
-  // 재고 부족으로 예약된 일반상품 주문도 상품 단위 release 경로를 잃지 않게 한다.
+  // 상품 플래그가 아니라 실제 대기 주문에서 후보 SKU를 파생한다.
   Object.keys(grouped).forEach(function (no) {
-    Object.keys(grouped[no].required).forEach(function (sku) { reservationProducts[sku] = true; });
+    Object.keys(grouped[no].required).forEach(function (sku) { candidateSkus[sku] = true; });
   });
   return { orders: Object.keys(grouped).map(function (no) { return grouped[no]; }),
-    inventory: inventory, reservationProducts: reservationProducts };
+    inventory: inventory, candidateSkus: candidateSkus };
 }
 
 function reservationOptionalColumn_(table, names) {
@@ -217,11 +213,11 @@ function buildReservationPreview_(sku, snapshot) {
     releaseOrderCount: calculated.selected.length, releaseQuantity: calculated.targetAllocated,
     totalPickingQuantity: calculated.totalAllocated, remaining: calculated.remaining[sku] || 0,
     selected: calculated.selected, waiting: calculated.waiting,
-    status: reservationProductStatus_(calculated, product.available)
+    status: reservationSkuStatus_(calculated, product.available)
   };
 }
 
-function reservationProductStatus_(calculated, available) {
+function reservationSkuStatus_(calculated, available) {
   if (calculated.selected.length) return '출고 가능';
   if (available <= 0) return '재고 없음';
   return calculated.waiting.length ? '주문 전체 재고 확인 필요' : '대기 없음';
@@ -238,10 +234,10 @@ function createReservationPickingBatch_(sku) {
       var snapshot = readReservationSnapshot_(), product = snapshot.inventory[toStr_(sku)];
       if (product) inventoryState = '가용재고 ' + product.available;
     } catch (ignore) { }
-    sendSystemNotification_('ERROR', '예약상품 피킹 실패', {
+    sendSystemNotification_('ERROR', '예약 주문 피킹 실패', {
       선택SKU: toStr_(sku), 피킹지시번호: e.pickingInstructionNo || '생성 전 실패',
       재고상태: inventoryState, 오류: e.message,
-      조치: '재고 상태를 확인하고 예약상품 피킹 관리에서 다시 시도하세요.'
+      조치: '재고 상태를 확인하고 예약 주문 피킹 관리에서 다시 시도하세요.'
     });
     throw e;
   }
@@ -252,14 +248,14 @@ function createReservationPickingBatchCore_(sku) {
   sku = toStr_(sku); if (!sku) throw new Error('상품코드를 선택하세요.');
   return withLock_(function () {
     var snapshot = readReservationSnapshot_();
-    if (!snapshot.reservationProducts[sku]) throw new Error('예약상품이 아닙니다: ' + sku);
+    if (!snapshot.candidateSkus[sku]) throw new Error('대기 주문에 없는 상품입니다: ' + sku);
     var preview = buildReservationPreview_(sku, snapshot);
     var orderNos = preview.selected.map(function (order) { return order.orderNo; });
     if (!orderNos.length) return { created: false, message: '현재 FIFO 기준으로 출고 가능한 주문이 없습니다.', preview: preview };
 
-    var confirmation = S3_1_주문확정(orderNos, { manualRelease: true, silent: true });
+    var confirmation = S3_1_주문확정(orderNos, { silent: true });
     if (confirmation.준비주문.length !== orderNos.length) {
-      rollbackReservationAllocation_(confirmation.준비주문);
+      rollbackStockCommitment_(confirmation.준비주문);
       throw new Error('재고가 변경되어 예약 배치를 만들지 못했습니다. 화면을 새로고침하세요.');
     }
     var picking;
@@ -267,7 +263,7 @@ function createReservationPickingBatchCore_(sku) {
       picking = S4_1_피킹지시생성(orderNos, { silent: true, reservationBatch: true });
       if (!picking.지시번호) throw new Error('피킹 헤더/라인을 만들지 못했습니다.');
     } catch (pickingError) {
-      rollbackReservationAllocation_(orderNos); throw pickingError;
+      rollbackStockCommitment_(orderNos); throw pickingError;
     }
 
     var pdf;
@@ -293,8 +289,8 @@ function createReservationPickingBatchCore_(sku) {
   });
 }
 
-/** S3 성공 뒤 S4 생성 전 실패한 경우에만 내부 예약 이동을 되돌린다. */
-function rollbackReservationAllocation_(orderNos) {
+/** S3 성공 뒤 S4 생성 전 실패한 경우에만 재고 확정을 되돌린다. */
+function rollbackStockCommitment_(orderNos) {
   if (!orderNos || !orderNos.length) return;
   var target = {}; orderNos.forEach(function (no) { target[toStr_(no)] = true; });
   var orders = readTable_(ROLE.주문);
@@ -307,21 +303,20 @@ function rollbackReservationAllocation_(orderNos) {
     row[O.confirmed] = ''; if (O.reason >= 0) row[O.reason] = '';
   });
   var master = readTable_(ROLE.마스터);
-  var M = { sku: col_(master, COL.상품품목코드, true), available: col_(master, COL.가용재고, true), reserved: col_(master, COL.예약재고, true) };
+  var M = { sku: col_(master, COL.상품품목코드, true), available: col_(master, COL.가용재고, true) };
   var index = {}; master.rows.forEach(function (row, i) { index[toStr_(row[M.sku])] = i; });
   Object.keys(required).forEach(function (sku) {
     var i = index[sku]; if (i === undefined) return;
     master.rows[i][M.available] = toNum_(master.rows[i][M.available]) + required[sku];
-    master.rows[i][M.reserved] = Math.max(0, toNum_(master.rows[i][M.reserved]) - required[sku]);
   });
   if (orders.rows.length && O.confirmed >= 0) writeColumn_(orders.sheet, O.confirmed, orders.rows);
   if (orders.rows.length && O.reason >= 0) writeColumn_(orders.sheet, O.reason, orders.rows);
-  if (master.rows.length) { writeColumn_(master.sheet, M.available, master.rows); writeColumn_(master.sheet, M.reserved, master.rows); }
+  if (master.rows.length) writeColumn_(master.sheet, M.available, master.rows);
 }
 
 /** 대시보드 호환 DTO. 별도의 예약대기 시트는 만들지 않는다. */
 function collectPreorderData_() {
-  var snapshot = readReservationSnapshot_(), summaries = reservationProductSummaries_(snapshot);
+  var snapshot = readReservationSnapshot_(), summaries = reservationSkuSummaries_(snapshot);
   var selectedOrders = {}, shortageSku = {};
   summaries.forEach(function (summary) {
     var calculation = calculateReservationBatch_(summary.sku, snapshot.inventory,

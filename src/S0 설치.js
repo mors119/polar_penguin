@@ -139,25 +139,20 @@ function 설치_2_시트정비(silent) {
 
   /* ---------- 상품마스터 ---------- */
   var 마스터 = readTable_(ROLE.마스터);
+  var 제거마스터 = migrateLegacyProductMasterSchema_(마스터);
+  마스터 = readTable_(ROLE.마스터);
   var 추가마스터 = ensureColumns_(마스터.sheet, 마스터.headers, [
-    COL.예약재고, COL.예약상품, COL.재고관리, COL.판매가, COL.최종동기화, '창고메모'
+    COL.재고관리, COL.판매가, COL.최종동기화, '창고메모'
   ]);
   마스터 = readTable_(ROLE.마스터);
-
-  [COL.예약재고, COL.불량재고].forEach(function (n) {
-    var c = col_(마스터, n, false);
-    if (c >= 0 && 마스터.rows.length) {
-      마스터.sheet.getRange(2, c + 1, 마스터.rows.length, 1)
-        .setValues(마스터.rows.map(function (r) {
-          return [isBlank_(r[c]) ? 0 : toNum_(r[c])];
-        }));
-    }
-  });
 
   [COL.상품품목코드, COL.상품명, COL.기본보관위치, COL.가용재고].forEach(function (n) {
     col_(마스터, n, true);
   });
-  결과.push('상품마스터: ' + (추가마스터.length ? '열 추가 ' + 추가마스터.join(', ') : '변경 없음'));
+  결과.push('상품마스터: ' + ([
+    제거마스터.length ? '레거시 열 제거 ' + 제거마스터.join(', ') : '',
+    추가마스터.length ? '열 추가 ' + 추가마스터.join(', ') : ''
+  ].filter(String).join(' / ') || '변경 없음'));
   var c위치 = col_(마스터, COL.기본보관위치, true);
   마스터.sheet.getRange(1, c위치 + 1).setNote('창고 소유 필드입니다. 재고 동기화가 덮어쓰지 않으며 운영자가 직접 관리합니다.');
   마스터.sheet.getRange(2, c위치 + 1, Math.max(마스터.sheet.getMaxRows() - 1, 1), 1).setBackground('FFF9E6');
@@ -256,7 +251,7 @@ function 진단_시트구조() {
              (없음.length ? '  누락: ' + 없음.join(', ') : ''));
   }
 
-  확인(ROLE.마스터, [COL.상품품목코드, COL.상품명, COL.기본보관위치, COL.가용재고, COL.예약재고, COL.예약상품]);
+  확인(ROLE.마스터, [COL.상품품목코드, COL.상품명, COL.기본보관위치, COL.가용재고, COL.재고관리]);
   확인(ROLE.주문, [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, COL.수량,
                   COL.출고완료, COL.피킹지시번호, COL.주문상태, COL.확정일시]);
   확인(ROLE.헤더, [COL.피킹지시번호, COL.주문번호, COL.품목수, COL.총수량, COL.상태]);
@@ -310,6 +305,24 @@ function ensureColumns_(sheet, headers, names) {
   return 추가;
 }
 
+/**
+ * 기존 이중 재고 모델을 단일 가용재고로 이전한다.
+ * 기존 가용재고는 S3에서 예약 수량을 이미 차감한 순 재고이므로 값을
+ * 그대로 보존한다. 예약재고를 한 번 더 빼면 기존 확정 주문이 중복 차감된다.
+ * 레거시 열은 헤더 이름으로 찾고 인덱스 변동을 피하기 위해 오른쪽부터 제거한다.
+ */
+function migrateLegacyProductMasterSchema_(table) {
+  var removedNames = ['이미지', '예약재고', '상품상태', '예약상품', '불량재고'];
+  var targets = [];
+  (table.headers || []).forEach(function (header, index) {
+    var name = toStr_(header);
+    if (removedNames.indexOf(name) >= 0) targets.push({ name: name, column: index + 1 });
+  });
+  targets.sort(function (a, b) { return b.column - a.column; });
+  targets.forEach(function (target) { table.sheet.deleteColumn(target.column); });
+  return targets.map(function (target) { return target.name; });
+}
+
 /* ============================================================
  *  메뉴
  * ============================================================ */
@@ -322,7 +335,7 @@ function onOpen(e) {
         .addItem('Input 지금 처리', 'processInput'))
       .addSubMenu(ui.createMenu('📋 주문')
         .addItem('선택 주문 취소', '선택_주문취소')
-        .addItem('예약상품 피킹 관리', '예약상품_피킹관리'))
+        .addItem('예약 주문 피킹 관리', '예약_주문피킹관리'))
       .addSubMenu(ui.createMenu('📄 피킹지시서')
         .addItem('피킹지시서 조회 / 재출력', 'S9_1_작업지시서출력'))
       .addSubMenu(ui.createMenu('📍 위치 관리')
