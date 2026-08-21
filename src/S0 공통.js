@@ -228,6 +228,11 @@ function getConfig_() {
   return cfg;
 }
 
+/** 같은 실행 안에서 setup 등으로 설정 행이 바뀐 경우 다음 조회가 시트를 다시 읽게 한다. */
+function resetConfigCache_() {
+  _cache.config = null;
+}
+
 function param_(키, 기본값) {
   var v = getConfig_().파라미터[키];
   return (v === undefined || v === null || v === '') ? 기본값 : v;

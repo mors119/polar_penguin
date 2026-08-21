@@ -215,6 +215,27 @@ test('successful maintenance sends one backup-link summary and Gmail failure doe
   assert.match(result.notificationError, /quota exceeded/);
 });
 
+test('maintenance uses the configured retention days instead of the fallback', () => {
+  const context = createContext();
+  context.param_ = key => key === '정리보존일수' ? 45 : '';
+  context.maintenancePreflight_ = () => true;
+  context.createBackupSnapshot_ = () => ({ fileId: 'backup-45', fileName: 'Polar Penguin Backup 2026-08-19 231500', url: 'https://drive/backup-45' });
+  let cutoffSeen = null;
+  context.archiveAndCleanupFinalizedOrders_ = cutoff => {
+    cutoffSeen = cutoff;
+    return { archive: { inserted: 0, skippedExisting: 0, failed: 0 }, ordersDeleted: 0, deletedInstructions: {} };
+  };
+  context.cleanupPickingHistory_ = () => ({ headerRowsDeleted: 0, lineRowsDeleted: 0, removedInstructions: {} });
+  context.inputFolder_ = () => ({});
+  context.cleanupFolderByRetention_ = () => ({ filesDeleted: 0, foldersDeleted: 0 });
+  context.sendSystemNotification_ = () => ({ sent: false, reason: '알림이메일 미설정' });
+  const now = new Date('2026-08-19T14:15:00Z');
+  const result = context.runBackupAndCleanup_({ now });
+  assert.equal(result.retentionDays, 45);
+  assert.equal(cutoffSeen.getTime(), now.getTime() - 45 * 24 * 60 * 60 * 1000);
+  assert.equal(result.aborted, false);
+});
+
 test('central notification handles blank configuration and Gmail failure without throwing', () => {
   const context = createContext(), logs = [];
   context.writeOpLog_ = (...args) => logs.push(args.join('/'));
@@ -227,6 +248,17 @@ test('central notification handles blank configuration and Gmail failure without
   const failed = context.sendSystemNotification_('INFO', '백업 및 정리 완료', 'backup link');
   assert.equal(failed.sent, false);
   assert.match(failed.reason, /quota/);
+});
+
+test('central notification resolves the configured recipient for each execution', () => {
+  const context = createContext(), sent = [];
+  let recipient = 'first@example.com';
+  context.param_ = key => key === '알림이메일' ? recipient : '';
+  context.GmailApp = { sendEmail: (to) => sent.push(to) };
+  context.sendSystemNotification_('INFO', '첫 알림', {});
+  recipient = 'second@example.com';
+  context.sendSystemNotification_('INFO', '두 번째 알림', {});
+  assert.deepEqual(sent, ['first@example.com', 'second@example.com']);
 });
 
 function iterator(items) {
