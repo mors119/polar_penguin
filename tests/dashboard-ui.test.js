@@ -80,7 +80,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
   context.Logger = { log() {} };
   context.onOpen();
   assert.ok(menuNames.includes('📦 Polar Penguin'));
-  for (const expected of ['processInput', '선택_주문취소', '예약_주문피킹관리',
+  for (const expected of ['processInput', '선택_주문취소', '예약상품_입고관리',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '진단_시트구조',
     '위치_미지정상품관리', 'setupSystem', '백업_및_정리', '정리_로그']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
@@ -89,7 +89,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
     assert.equal(handlers.includes(internal), false, `${internal} must stay out of the operator menu`);
   }
   for (const expected of ['Input 지금 처리', '피킹지시서 조회 / 재출력', '위치 미지정 상품',
-    '선택 주문 취소', '예약 주문 피킹 관리', '대시보드 갱신', '시스템 상태 확인',
+    '선택 주문 취소', '예약상품 입고 관리', '대시보드 갱신', '시스템 상태 확인',
     '시스템 설치 / 복구', '백업 및 정리', '로그 정리']) {
     assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
   }
@@ -103,4 +103,14 @@ test('onOpen registers the current menu and every handler exists in source', () 
   for (const handler of handlers) {
     assert.match(allSource, new RegExp(`function\\s+${handler.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*\\(`));
   }
+});
+
+test('reservation inbound modal uses explicit stock, order-count, quantity, and FIFO wording', () => {
+  const html = fs.readFileSync(path.join(rootPath, 'src', 'ReservationInbound.html'), 'utf8');
+  for (const label of ['예약상품 입고 관리', '현재 재고', '대기 주문', '대기 수량', '이번 입고 수량',
+    '입고 반영 후 재고', 'FIFO 출고 가능 주문', 'FIFO 출고 가능 수량', '미사용 입고 수량',
+    '미리보기', '입고 반영 및 피킹']) {
+    assert.match(html, new RegExp(label));
+  }
+  assert.doesNotMatch(html, /예약재고|예약상품 피킹 관리/);
 });

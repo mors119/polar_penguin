@@ -12,7 +12,7 @@ function collectOrderStatus_() {
   out.예약전체 = reservation.전체; out.예약수량 = reservation.총수량;
   out.예약출고가능 = reservation.출고가능; out.예약출고가능SKU = reservation.출고가능SKU; out.예약부족 = reservation.재고부족;
   out.예약목록 = reservation.주문;
-  if (out.예약출고가능) out.권고 = { 제목: '예약 주문 피킹 가능', 내용: [out.예약출고가능SKU + '개 SKU에서 FIFO 기준 ' + out.예약출고가능 + '건을 출고할 수 있습니다.', '메뉴의 예약 주문 피킹 관리를 여세요.'], 색: DASHCOLOR.경고 };
+  if (out.예약출고가능) out.권고 = { 제목: '예약 주문 피킹 가능', 내용: [out.예약출고가능SKU + '개 SKU에서 FIFO 기준 ' + out.예약출고가능 + '건을 출고할 수 있습니다.', '메뉴의 예약상품 입고 관리를 여세요.'], 색: DASHCOLOR.경고 };
   return out;
 }
 
@@ -112,7 +112,7 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
     .setBackground(operation.recentErrors.length ? DASHCOLOR.경고 : DASHCOLOR.좋음);
   sh.getRange(33, 1, 1, 10).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / ')).setWrap(true).setBackground(order.권고.색);
   sh.getRange(35, 1, 1, 10).merge().setValue('빠른 작업 (셀은 버튼이 아닙니다 — 상단 메뉴에서 실행)').setFontWeight('bold').setBackground(DASHCOLOR.경고);
-  sh.getRange(36, 1, 1, 8).setValues([['파일 입력: Drive Input', '', 'Input 지금 처리', '', '예약 주문 피킹 관리', '', '피킹지시서 재출력', '']]).setFontWeight('bold');
+  sh.getRange(36, 1, 1, 8).setValues([['파일 입력: Drive Input', '', 'Input 지금 처리', '', '예약상품 입고 관리', '', '피킹지시서 재출력', '']]).setFontWeight('bold');
   [1, 3, 5, 7].forEach(function (col) { sh.getRange(36, col, 1, 2).merge(); });
   for (var c = 1; c <= 10; c++) sh.setColumnWidth(c, c % 2 ? 120 : 90);
   sh.setFrozenRows(2); sh.setHiddenGridlines(true); return sh;
