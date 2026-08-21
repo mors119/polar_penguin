@@ -24,13 +24,7 @@ function 초기화_1_미리보기() {
       } catch (e) { out.push('  · ' + p[1] + ' — ❌ ' + e.message); }
     });
 
-  try {
-    var m = readTable_(ROLE.마스터);
-    var c예약 = col_(m, COL.예약재고, false);
-    var 예약합 = 0;
-    if (c예약 >= 0) m.rows.forEach(function (r) { 예약합 += toNum_(r[c예약]); });
-    out.push('  · 상품마스터 — 행은 유지, 예약재고만 0으로 (현재 합계 ' + 예약합 + ')');
-  } catch (e) { out.push('  · 상품마스터 — ❌ ' + e.message); }
+  out.push('  · 상품마스터 — 전체 행과 재고 값 유지');
 
   var ss = consoleSS_();
   [CONSOLE.재고이동로그, CONSOLE.작업로그].forEach(function (n) {
@@ -56,7 +50,7 @@ function 초기화_1_미리보기() {
  * 2단계. 실제 초기화.
  * @param {String} 확인문구  반드시 "초기화" 를 넘겨야 실행된다.
  * @return {string} 시트별 초기화 결과
- * @sideEffect 주문·피킹 데이터와 운영 로그를 삭제하고 예약재고를 0으로 만든다.
+ * @sideEffect 주문·피킹 데이터와 운영 로그를 삭제하며 상품마스터는 변경하지 않는다.
  */
 function 초기화_2_전체실행(확인문구) {
   if (확인문구 !== '초기화') {
@@ -87,18 +81,7 @@ function 초기화_2_전체실행(확인문구) {
         }
       });
 
-    // ---------- 상품마스터: 예약재고만 0으로 ----------
-    try {
-      var m = readTable_(ROLE.마스터);
-      var c예약 = col_(m, COL.예약재고, false);
-      if (c예약 >= 0 && m.rows.length) {
-        m.sheet.getRange(2, c예약 + 1, m.rows.length, 1)
-          .setValues(m.rows.map(function () { return [0]; }));
-        out.push('✅ 상품마스터 — 예약재고 ' + m.rows.length + '행을 0으로 초기화');
-      }
-    } catch (e) {
-      out.push('❌ 상품마스터: ' + e.message);
-    }
+    out.push('· 상품마스터 — 변경 없음');
 
     // ---------- 로그 비우기 (완료 후 이번 초기화 작업로그 한 행은 다시 기록됨) ----------
     var ss = consoleSS_();

@@ -17,7 +17,7 @@ function getProductsForLocationManagement_(query, includeAll) {
   var M = {
     sku: col_(master, COL.상품품목코드, true), name: col_(master, COL.상품명, true),
     option: col_(master, COL.옵션명, false), available: col_(master, COL.가용재고, true),
-    reserved: col_(master, COL.예약재고, true), location: col_(master, COL.기본보관위치, true)
+    location: col_(master, COL.기본보관위치, true)
   };
   var result = [];
   master.rows.forEach(function (row) {
@@ -25,7 +25,7 @@ function getProductsForLocationManagement_(query, includeAll) {
     var location = toStr_(row[M.location]);
     if (!includeAll && location) return;
     var item = { sku: sku, productName: toStr_(row[M.name]), option: M.option >= 0 ? toStr_(row[M.option]) : '',
-      available: toNum_(row[M.available]), reserved: toNum_(row[M.reserved]), location: location };
+      available: toNum_(row[M.available]), location: location };
     var haystack = [item.sku, item.productName, item.option, item.location].join(' ').toLowerCase();
     if (!query || haystack.indexOf(query) >= 0) result.push(item);
   });

@@ -49,10 +49,10 @@ function cancelOrderCore_(orderNo, reason, source, options) {
       if (Object.keys(shipped).length) required = shipped;
     }
     var 마스터 = readTable_(ROLE.마스터);
-    var M = { 코드: col_(마스터, COL.상품품목코드, true), 가용: col_(마스터, COL.가용재고, true), 예약: col_(마스터, COL.예약재고, true) };
-    var index = {}, available = [], reserved = [];
+    var M = { 코드: col_(마스터, COL.상품품목코드, true), 가용: col_(마스터, COL.가용재고, true) };
+    var index = {}, available = [];
     마스터.rows.forEach(function (row, idx) {
-      index[toStr_(row[M.코드])] = idx; available[idx] = toNum_(row[M.가용]); reserved[idx] = toNum_(row[M.예약]);
+      index[toStr_(row[M.코드])] = idx; available[idx] = toNum_(row[M.가용]);
     });
     var logs = [], actor = 사용자_(), instruction = toStr_(items[0].row[col_(주문, COL.피킹지시번호, true)]);
     var reservationWasMade = state === '처리완료' ||
@@ -60,17 +60,15 @@ function cancelOrderCore_(orderNo, reason, source, options) {
     Object.keys(required).forEach(function (code) {
       var mi = index[code];
       if (mi === undefined) return;
-      var restore = 0, type = ENUM.로그구분.복원;
+      var restore = 0;
       if (state === ENUM.주문상태.출고완료) {
         restore = required[code];
       } else if (reservationWasMade) {
-        restore = Math.min(required[code], reserved[mi]);
-        reserved[mi] -= restore;
-        type = ENUM.로그구분.예약해제;
+        restore = required[code];
       }
       if (!restore) return;
       available[mi] += restore;
-      logs.push({ 구분: type, 피킹지시번호: instruction, 주문번호: orderNo, 품목별주문번호: '',
+      logs.push({ 구분: ENUM.로그구분.복원, 피킹지시번호: instruction, 주문번호: orderNo, 품목별주문번호: '',
         상품코드: code, 변동량: restore, 변동후재고: available[mi], 담당자: actor,
         사유: source + ' 취소 복원 · ' + reason });
     });
@@ -88,7 +86,6 @@ function cancelOrderCore_(orderNo, reason, source, options) {
     if (O.대기사유 >= 0) writeColumn_(주문.sheet, O.대기사유, 주문.rows);
     if (마스터.rows.length) {
       마스터.sheet.getRange(2, M.가용 + 1, available.length, 1).setValues(available.map(function (v) { return [v]; }));
-      마스터.sheet.getRange(2, M.예약 + 1, reserved.length, 1).setValues(reserved.map(function (v) { return [v]; }));
     }
     closePickingForCancellation_(orderNo, now);
     writeStockLog_(logs);

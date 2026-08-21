@@ -12,24 +12,25 @@ function collectOrderStatus_() {
   out.예약전체 = reservation.전체; out.예약수량 = reservation.총수량;
   out.예약출고가능 = reservation.출고가능; out.예약출고가능SKU = reservation.출고가능SKU; out.예약부족 = reservation.재고부족;
   out.예약목록 = reservation.주문;
-  if (out.예약출고가능) out.권고 = { 제목: '예약상품 피킹 가능', 내용: [out.예약출고가능SKU + '개 SKU에서 FIFO 기준 ' + out.예약출고가능 + '건을 출고할 수 있습니다.', '메뉴의 예약상품 피킹 관리를 여세요.'], 색: DASHCOLOR.경고 };
+  if (out.예약출고가능) out.권고 = { 제목: '예약 주문 피킹 가능', 내용: [out.예약출고가능SKU + '개 SKU에서 FIFO 기준 ' + out.예약출고가능 + '건을 출고할 수 있습니다.', '메뉴의 예약 주문 피킹 관리를 여세요.'], 색: DASHCOLOR.경고 };
   return out;
 }
 
 function collectStockStatus_() {
-  var out = { 상품수: 0, 총가용: 0, 총예약: 0, 총불량: 0, 품절: 0, 위치미지정: 0, 부족: [], 예약부족SKU: [] };
+  var out = { 상품수: 0, 총가용: 0, 품절: 0, 음수허용: 0, 위치미지정: 0, 부족: [], 예약부족SKU: [] };
   var table = readTable_(ROLE.마스터);
   var C = { 코드: col_(table, COL.상품품목코드, true), 상품명: col_(table, COL.상품명, true),
-    가용: col_(table, COL.가용재고, true), 예약: col_(table, COL.예약재고, true), 불량: col_(table, COL.불량재고, false),
+    가용: col_(table, COL.가용재고, true), 관리: col_(table, COL.재고관리, true),
     위치: col_(table, COL.기본보관위치, true) };
   var threshold = Number(param_('재고경고임계치', 3));
   table.rows.forEach(function (row) {
     var code = toStr_(row[C.코드]); if (!code) return;
-    var available = toNum_(row[C.가용]), reserved = toNum_(row[C.예약]), bad = C.불량 >= 0 ? toNum_(row[C.불량]) : 0;
-    out.상품수++; out.총가용 += available; out.총예약 += reserved; out.총불량 += bad;
+    var available = toNum_(row[C.가용]), managed = toStr_(row[C.관리]).toUpperCase() !== 'F';
+    out.상품수++; out.총가용 += available;
     if (!toStr_(row[C.위치])) out.위치미지정++;
-    if (available <= 0) out.품절++;
-    if (available <= threshold) out.부족.push({ 코드: code, 상품명: toStr_(row[C.상품명]), 가용: available, 예약: reserved });
+    if (managed && available <= 0) out.품절++;
+    if (!managed && available < 0) out.음수허용++;
+    if (managed && available <= threshold) out.부족.push({ 코드: code, 상품명: toStr_(row[C.상품명]), 가용: available });
   });
   var reservation = collectPreorderData_();
   out.예약부족SKU = reservation.예약부족SKU || [];
@@ -103,7 +104,7 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
   dashboardSection_(sh, 9, '주문', [['예약', order.예약], ['출고완료', order.출고완료], ['취소', order.취소], ['전체', order.전체]]);
   dashboardSection_(sh, 14, '예약', [['예약 주문', order.예약전체], ['예약 수량', order.예약수량], ['출고 가능 주문', order.예약출고가능], ['가용 예약 SKU', order.예약출고가능SKU], ['재고 부족 주문', order.예약부족]]);
   dashboardSection_(sh, 19, '출력', [['오늘 생성된 피킹지시', picking.오늘지시], ['오늘 출고 처리 수량', picking.오늘출고수량], ['출력 오류', picking.kpi.출력오류]]);
-  dashboardSection_(sh, 24, '재고', [['가용 재고', stock.총가용], ['예약 재고', stock.총예약], ['부족 상품', stock.부족.length], ['위치 미지정 상품', stock.위치미지정], ['예약 부족 SKU', stock.예약부족SKU.length]]);
+  dashboardSection_(sh, 24, '재고', [['가용재고', stock.총가용], ['품절(T)', stock.품절], ['음수 순재고(F)', stock.음수허용], ['위치 미지정 상품', stock.위치미지정], ['예약 부족 SKU', stock.예약부족SKU.length]]);
   sh.getRange(28, 1, 1, 10).merge().setValue('위치 미지정 상품 ' + stock.위치미지정 + '건 — 📍 위치 관리 → 위치 미지정 상품')
     .setWrap(true).setBackground(stock.위치미지정 ? DASHCOLOR.경고 : DASHCOLOR.좋음);
   sh.getRange(30, 1, 1, 10).merge().setValue('최근 오류').setFontWeight('bold').setBackground(DASHCOLOR.제목).setFontColor('FFFFFF');
@@ -111,7 +112,7 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
     .setBackground(operation.recentErrors.length ? DASHCOLOR.경고 : DASHCOLOR.좋음);
   sh.getRange(33, 1, 1, 10).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / ')).setWrap(true).setBackground(order.권고.색);
   sh.getRange(35, 1, 1, 10).merge().setValue('빠른 작업 (셀은 버튼이 아닙니다 — 상단 메뉴에서 실행)').setFontWeight('bold').setBackground(DASHCOLOR.경고);
-  sh.getRange(36, 1, 1, 8).setValues([['파일 입력: Drive Input', '', 'Input 지금 처리', '', '예약상품 피킹 관리', '', '피킹지시서 재출력', '']]).setFontWeight('bold');
+  sh.getRange(36, 1, 1, 8).setValues([['파일 입력: Drive Input', '', 'Input 지금 처리', '', '예약 주문 피킹 관리', '', '피킹지시서 재출력', '']]).setFontWeight('bold');
   [1, 3, 5, 7].forEach(function (col) { sh.getRange(36, col, 1, 2).merge(); });
   for (var c = 1; c <= 10; c++) sh.setColumnWidth(c, c % 2 ? 120 : 90);
   sh.setFrozenRows(2); sh.setHiddenGridlines(true); return sh;

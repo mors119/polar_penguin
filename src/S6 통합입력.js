@@ -173,7 +173,7 @@ function runInputBusiness_(type, file, outputFolder) {
   if (!result.confirm.준비주문.length) return result; // 예약은 정상 입력 결과다.
 
   result.picking = S4_1_피킹지시생성(result.confirm.준비주문, { silent: true });
-  if (!result.picking.지시번호) throw new Error('재고 예약 뒤 피킹지시를 만들지 못했습니다.');
+  if (!result.picking.지시번호) throw new Error('재고 확정 뒤 피킹지시를 만들지 못했습니다.');
   try {
     result.pdf = S9_피킹PDF생성(result.picking.지시번호, outputFolder);
   } catch (e) {

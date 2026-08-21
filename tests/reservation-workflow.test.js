@@ -11,7 +11,7 @@ for (const file of ['S0 공통.js', 'S3 주문확정.js', 'S8 예약관리.js'])
 }
 const plain = value => JSON.parse(JSON.stringify(value));
 const inventory = values => Object.fromEntries(Object.entries(values).map(([sku, available]) =>
-  [sku, { available, name: sku, option: '', disabled: false }]));
+  [sku, { available, name: sku, option: '', managed: true }]));
 const order = (orderNo, date, required, itemOrderNo = `${orderNo}-1`) =>
   ({ orderNo, orderDate: date, itemOrderNo, required, recipient: '김희성 · 01012345678' });
 
@@ -62,7 +62,7 @@ test('duplicate SKU lines are aggregated before FIFO evaluation', () => {
   assert.equal(result.waiting[0].targetQuantity, 5);
 });
 
-test('an order with multiple reservation products releases only when every SKU is available', () => {
+test('an order with multiple waiting SKUs releases only when every managed SKU is available', () => {
   const blocked = context.calculateReservationBatch_('BOOK', inventory({ BOOK: 5, BONUS: 0 }), [
     order('A001', '2026-08-01', { BOOK: 2, BONUS: 1 })
   ]);
@@ -88,8 +88,8 @@ function installConfirmationTables(orderRows) {
     [context.ROLE.주문]: table(context.ROLE.주문,
       ['주문번호', '상품품목코드', '수량', '주문상태', '확정일시', '대기사유'], orderRows),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
-      ['상품품목코드', '가용재고', '예약재고', '상품상태', '예약상품'],
-      [['NORMAL', 10, 0, '판매중', 'N'], ['BOOK', 10, 0, '판매중', 'Y']])
+      ['상품품목코드', '가용재고', '재고관리'],
+      [['NORMAL', 10, 'T'], ['BOOK', 10, 'T']])
   };
   context.readTable_ = role => tables[role];
   context.writeColumn_ = () => {};
@@ -101,25 +101,41 @@ function installConfirmationTables(orderRows) {
   return tables;
 }
 
-test('same customer separate normal and reservation orders remain independent fulfillment units', () => {
+test('reservation queue candidates come from waiting order rows without product flags', () => {
+  const tables = {
+    [context.ROLE.주문]: table(context.ROLE.주문,
+      ['주문번호', '품목별 주문번호', '상품품목코드', '수량', '주문상태', '피킹지시번호'],
+      [['WAIT-1', 'ITEM-1', 'BOOK', 2, '예약', '']]),
+    [context.ROLE.마스터]: table(context.ROLE.마스터,
+      ['상품품목코드', '상품명', '옵션명', '가용재고', '재고관리'],
+      [['BOOK', '책', '-', 5, 'T']])
+  };
+  context.readTable_ = role => tables[role];
+  context.getConfig_ = () => ({ 별칭: {} });
+  const snapshot = context.readReservationSnapshot_();
+  assert.deepEqual(plain(Object.keys(snapshot.candidateSkus)), ['BOOK']);
+  assert.equal(snapshot.orders[0].required.BOOK, 2);
+});
+
+test('separate orders remain independent fulfillment units without a product reservation flag', () => {
   const tables = installConfirmationTables([
     ['NORMAL-ORDER', 'NORMAL', 2, '예약', '', ''],
     ['RES-ORDER', 'BOOK', 3, '예약', '', '']
   ]);
   const result = context.S3_1_주문확정(['NORMAL-ORDER', 'RES-ORDER'], { silent: true });
-  assert.deepEqual(plain(result.준비주문), ['NORMAL-ORDER']);
+  assert.deepEqual(plain(result.준비주문), ['NORMAL-ORDER', 'RES-ORDER']);
   assert.equal(tables[context.ROLE.마스터].rows[0][1], 8);
-  assert.equal(tables[context.ROLE.마스터].rows[1][1], 10);
+  assert.equal(tables[context.ROLE.마스터].rows[1][1], 7);
 });
 
-test('mixed normal and reservation items inside one order never reserve partially', () => {
+test('mixed items inside one order commit atomically when every managed SKU is available', () => {
   const tables = installConfirmationTables([
     ['MIXED', 'NORMAL', 2, '예약', '', ''], ['MIXED', 'BOOK', 1, '예약', '', '']
   ]);
   const result = context.S3_1_주문확정(['MIXED'], { silent: true });
-  assert.equal(result.준비주문.length, 0);
-  assert.equal(tables[context.ROLE.마스터].rows[0][1], 10);
-  assert.equal(tables[context.ROLE.마스터].rows[0][2], 0);
+  assert.equal(result.준비주문.length, 1);
+  assert.equal(tables[context.ROLE.마스터].rows[0][1], 8);
+  assert.equal(tables[context.ROLE.마스터].rows[1][1], 9);
 });
 
 test('generation revalidates under lock and never accepts browser-selected order IDs', () => {
@@ -127,7 +143,7 @@ test('generation revalidates under lock and never accepts browser-selected order
   context.withLock_ = fn => { locked = true; return fn(); };
   context.toStr_ = value => String(value || '').trim();
   context.readReservationSnapshot_ = () => ({
-    reservationProducts: { BOOK: true }, inventory: inventory({ BOOK: 0 }),
+    candidateSkus: { BOOK: true }, inventory: inventory({ BOOK: 0 }),
     orders: [order('A001', '2026-08-01', { BOOK: 1 })]
   });
   const result = context.createReservationPickingBatch_('BOOK');
@@ -142,7 +158,7 @@ test('successful generation makes the order immediately ineligible for a second 
   context.withLock_ = fn => fn();
   context.toStr_ = value => String(value || '').trim();
   context.readReservationSnapshot_ = () => ({
-    reservationProducts: { BOOK: true }, inventory: inventory({ BOOK: eligible ? 2 : 1 }),
+    candidateSkus: { BOOK: true }, inventory: inventory({ BOOK: eligible ? 2 : 1 }),
     orders: eligible ? [order('A001', '2026-08-01', { BOOK: 1 })] : []
   });
   context.S3_1_주문확정 = () => ({ 준비주문: ['A001'] });
