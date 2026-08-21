@@ -82,7 +82,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
   assert.ok(menuNames.includes('📦 Polar Penguin'));
   for (const expected of ['processInput', '선택_주문취소', '예약_주문피킹관리',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '진단_시트구조',
-    '위치_미지정상품관리', 'setupSystem', '백업_및_정리', '정리_로그']) {
+    '위치_미지정상품관리', 'setupSystem', '설정_열기', '백업_및_정리', '정리_로그']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
   }
   for (const internal of ['S1_1_카페24재고동기화', 'S2_1_주문CSV취입', 'S3_1_주문확정', 'S4_1_피킹지시생성']) {
@@ -90,9 +90,10 @@ test('onOpen registers the current menu and every handler exists in source', () 
   }
   for (const expected of ['Input 지금 처리', '피킹지시서 조회 / 재출력', '위치 미지정 상품',
     '선택 주문 취소', '예약 주문 피킹 관리', '대시보드 갱신', '시스템 상태 확인',
-    '시스템 설치 / 복구', '백업 및 정리', '로그 정리']) {
+    '시스템 설치 / 복구', '설정', '백업 및 정리', '로그 정리']) {
     assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
   }
+  assert.equal(labels.filter(label => label === '설정').length, 1);
   for (const internal of ['카페24 재고 동기화', '주문 CSV 취입', '주문 확정', '피킹지시 생성']) {
     assert.equal(labels.includes(internal), false, `${internal} must stay out of the operator menu`);
   }
@@ -103,4 +104,51 @@ test('onOpen registers the current menu and every handler exists in source', () 
   for (const handler of handlers) {
     assert.match(allSource, new RegExp(`function\\s+${handler.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*\\(`));
   }
+});
+
+test('settings menu shows and activates only the existing settings sheet without changing data', () => {
+  const values = [
+    ['구분', '키', '값', '비고'],
+    ['파라미터', '알림이메일', 'operator@example.com', '알림 수신자'],
+    ['파라미터', '정리보존일수', 45, '보존 기준']
+  ];
+  let activatedCell = null;
+  const settings = {
+    hidden: true,
+    getLastRow: () => values.length,
+    getRange(row, col, rows = 1, cols = 1) {
+      return {
+        getValues: () => Array.from({ length: rows }, (_, r) =>
+          Array.from({ length: cols }, (_, c) => values[row - 1 + r][col - 1 + c])),
+        activate: () => { activatedCell = [row, col]; }
+      };
+    },
+    showSheet() { this.hidden = false; }
+  };
+  const internal = { hidden: true };
+  let activeSheet = null;
+  const ss = {
+    getSheetByName: name => name === '설정' ? settings : internal,
+    setActiveSheet: sheet => { activeSheet = sheet; }
+  };
+  const before = JSON.stringify(values);
+  let formatted = null;
+  context.consoleSS_ = () => ss;
+  context.formatSettingsSheet_ = sheet => { formatted = sheet; return sheet; };
+  const result = context.설정_열기();
+  assert.equal(result, settings);
+  assert.equal(formatted, settings);
+  assert.equal(settings.hidden, false);
+  assert.equal(activeSheet, settings);
+  assert.deepEqual(activatedCell, [2, 3]);
+  assert.equal(internal.hidden, true);
+  assert.equal(JSON.stringify(values), before);
+});
+
+test('settings menu reports the established repair action when the settings sheet is missing', () => {
+  let message = '';
+  context.consoleSS_ = () => ({ getSheetByName: () => null });
+  context.alert_ = value => { message = value; };
+  assert.equal(context.설정_열기(), null);
+  assert.match(message, /⚙ 관리 → 시스템 설치 \/ 복구/);
 });

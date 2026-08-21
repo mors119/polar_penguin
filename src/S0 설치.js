@@ -272,7 +272,9 @@ function 진단_시트구조() {
     try { inputFolder_(item[1]); out.push('✅ ' + item[0]); }
     catch (e) { out.push('❌ ' + item[0] + ': ' + e.message); }
   });
-  out.push(toStr_(param_('알림이메일', '')) ? '✅ 알림이메일' : '⚠ 알림이메일 미설정');
+  out.push(toStr_(param_('알림이메일', ''))
+    ? '✅ 알림이메일'
+    : '⚠ 알림이메일 미설정 → ⚙ 관리 → 설정에서 입력하세요.');
 
   var trg = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
   out.push((trg.indexOf('processInput') >= 0 ? '✅ ' : '❌ ') + 'processInput 트리거');
@@ -424,6 +426,7 @@ function onOpen(e) {
         .addItem('시스템 상태 확인', '진단_시트구조'))
       .addSubMenu(ui.createMenu('⚙ 관리')
         .addItem('시스템 설치 / 복구', 'setupSystem')
+        .addItem('설정', '설정_열기')
         .addItem('백업 및 정리', '백업_및_정리')
         .addItem('로그 정리', '정리_로그'))
       .addToUi();
@@ -432,10 +435,106 @@ function onOpen(e) {
   }
 }
 
-function 설정_보기() {
+/** 숨김 설정 탭만 표시하고 운영자가 가장 먼저 확인할 알림 설정으로 이동한다. */
+function 설정_열기() {
   var ss = consoleSS_(), sheet = ss.getSheetByName(CONSOLE.설정);
-  if (sheet && typeof sheet.showSheet === 'function') sheet.showSheet();
-  if (sheet && typeof ss.setActiveSheet === 'function') ss.setActiveSheet(sheet);
+  if (!sheet) {
+    alert_('설정 탭이 없습니다. ⚙ 관리 → 시스템 설치 / 복구를 실행하세요.');
+    return null;
+  }
+
+  formatSettingsSheet_(sheet);
+  if (typeof sheet.showSheet === 'function') sheet.showSheet();
+  if (typeof ss.setActiveSheet === 'function') ss.setActiveSheet(sheet);
+
+  var targetRow = findSettingsRow_(sheet, '파라미터', '알림이메일') || 1;
+  var targetColumn = targetRow === 1 ? 1 : 3;
+  var target = sheet.getRange(targetRow, targetColumn);
+  if (target && typeof target.activate === 'function') target.activate();
+  return sheet;
+}
+
+/** 이전 배포나 직접 호출에서 사용하던 함수명은 동일 동작으로 유지한다. */
+function 설정_보기() { return 설정_열기(); }
+
+function findSettingsRow_(sheet, section, key) {
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues();
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0] || '').trim() === section && String(values[i][1] || '').trim() === key) return i + 2;
+  }
+  return 0;
+}
+
+function isSystemManagedSetting_(section, key) {
+  return section === '파일ID' || section === '시트명' || section === '별칭' ||
+    ['통합Input폴더ID', 'Success폴더ID', 'Error폴더ID', 'Output폴더ID', '백업폴더ID'].indexOf(key) >= 0;
+}
+
+/** 기존 비고가 비어 있을 때만 운영 도움말을 보충한다. */
+function ensureSettingsHelpText_(sheet) {
+  if (!sheet || sheet.getLastRow() < 2) return;
+  var help = {
+    '알림이메일': '오류 및 백업/정리 결과를 받을 이메일 주소',
+    '정리보존일수': '완료/취소 주문과 오래된 Success/Error/Output 정리 기준',
+    '폴링주기(분)': 'Input 자동 확인 주기. 변경 후 시스템 설치 / 복구를 실행하세요.',
+    '통합Input폴더ID': 'setupSystem()이 ROOT/Input 폴더를 자동 연결',
+    'Success폴더ID': 'setupSystem()이 ROOT/Success 폴더를 자동 연결',
+    'Error폴더ID': 'setupSystem()이 ROOT/Error 폴더를 자동 연결',
+    'Output폴더ID': 'setupSystem()이 ROOT/Output 폴더를 자동 연결',
+    '백업폴더ID': 'setupSystem()이 ROOT/Backup 폴더를 자동 연결'
+  };
+  var values = sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues();
+  values.forEach(function (row, index) {
+    var key = String(row[1] || '').trim();
+    if (!String(row[3] || '').trim() && help[key]) sheet.getRange(index + 2, 4).setValue(help[key]);
+  });
+}
+
+/** 4열 설정 테이블을 유지하면서 운영자용 시각 구분과 경고형 validation을 적용한다. */
+function formatSettingsSheet_(sheet) {
+  if (!sheet) return null;
+  var lastRow = Math.max(sheet.getLastRow(), 1);
+  sheet.getRange(1, 1, 1, 4)
+    .setFontWeight('bold').setFontColor('FFFFFF').setBackground('274C5E')
+    .setVerticalAlignment('middle').setWrap(true)
+    .setNote('⚙ Polar Penguin 설정\n운영 환경과 알림·백업 정책을 관리합니다.');
+  sheet.setFrozenRows(1);
+  sheet.setColumnWidth(1, 110);
+  sheet.setColumnWidth(2, 190);
+  sheet.setColumnWidth(3, 280);
+  sheet.setColumnWidth(4, 430);
+  sheet.setHiddenGridlines(true);
+  if (lastRow < 2) return sheet;
+
+  var values = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+  values.forEach(function (row, index) {
+    var sheetRow = index + 2;
+    var section = String(row[0] || '').trim(), key = String(row[1] || '').trim();
+    var systemManaged = isSystemManagedSetting_(section, key);
+    var sectionColor = section === '파라미터' ? 'DDEBF7' :
+      (section === '별칭' ? 'EDEDED' : 'E2F0D9');
+    sheet.getRange(sheetRow, 1, 1, 2).setBackground(sectionColor).setFontWeight('bold');
+    sheet.getRange(sheetRow, 1, 1, 4).setVerticalAlignment('middle').setWrap(true);
+
+    var valueCell = sheet.getRange(sheetRow, 3).clearDataValidations()
+      .setBackground(systemManaged ? 'F2F2F2' : 'FFF2CC')
+      .setNote(systemManaged
+        ? '시스템 관리 값입니다. setupSystem()이 유효성을 관리하므로 일반적으로 수정하지 않아도 됩니다.'
+        : '운영자 설정입니다. 변경한 값은 다음 실행부터 적용됩니다.');
+
+    if (key === '알림이메일') {
+      valueCell.setDataValidation(SpreadsheetApp.newDataValidation().requireTextIsEmail()
+        .setAllowInvalid(true).setHelpText('비워 둘 수 있습니다. 입력할 때는 올바른 이메일 주소 형식을 사용하세요.').build());
+    } else if (key === '정리보존일수') {
+      valueCell.setDataValidation(SpreadsheetApp.newDataValidation()
+        .requireFormulaSatisfied('=OR(C' + sheetRow + '="",AND(ISNUMBER(C' + sheetRow + '),C' + sheetRow + '>=1,MOD(C' + sheetRow + ',1)=0))')
+        .setAllowInvalid(true).setHelpText('1 이상의 정수를 입력하세요. 비어 있으면 기본값 30일을 사용합니다.').build());
+    } else if (key === '폴링주기(분)') {
+      valueCell.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList([1, 5, 10, 15, 30], true)
+        .setAllowInvalid(true).setHelpText('지원 주기: 1, 5, 10, 15, 30분. 변경 후 시스템 설치 / 복구를 실행하세요.').build());
+    }
+  });
   return sheet;
 }
 

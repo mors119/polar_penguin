@@ -191,6 +191,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     getActiveSpreadsheet: () => null,
     newDataValidation: () => ({
       requireValueInList(values) { validationLists.push(values); return this; }, setAllowInvalid() { return this; },
+      requireTextIsEmail() { validationLists.push(['EMAIL']); return this; },
+      requireFormulaSatisfied(formula) { validationLists.push(['FORMULA', formula]); return this; },
       setHelpText() { return this; }, build() { return {}; }
     })
   };
@@ -245,7 +247,11 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   }
   assert.equal(validationLists.some((values) => values.join(',') === 'O,X'), false);
   assert.ok(validationLists.some((values) => values.join(',') === '예약,출고완료,취소'));
+  assert.ok(validationLists.some((values) => values[0] === 'EMAIL'));
+  assert.ok(validationLists.some((values) => values[0] === 'FORMULA' && values[1].includes('MOD(C')));
   assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input에 파일 넣기/);
+  assert.ok(operationSs.getSheetByName('📖 안내').getDataRange().getValues()
+    .some(row => String(row[1] || '').includes('⚙ 관리 → 설정')));
   const pickingHeaderColumns = operationSs.getSheetByName('피킹(헤더)').getDataRange().getValues()[0];
   assert.equal(pickingHeaderColumns.includes('카트 슬롯'), false);
   assert.equal(pickingHeaderColumns.includes('피킹담당자'), false);
@@ -267,6 +273,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   configSheet.getRange(pollingRow, 3).setValue(15);
   const retentionRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '정리보존일수') + 1;
   const emailRow = configValues.findIndex((row) => row[0] === '파라미터' && row[1] === '알림이메일') + 1;
+  assert.match(configSheet.getRange(retentionRow, 4).getValue(), /완료\/취소 주문/);
+  assert.match(configSheet.getRange(emailRow, 4).getValue(), /이메일 주소/);
   configSheet.getRange(retentionRow, 3).setValue(45);
   configSheet.getRange(emailRow, 3).setValue('ops@example.com');
   configSheet.getRange(configSheet.getLastRow() + 1, 1, 1, 4)

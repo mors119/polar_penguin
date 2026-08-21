@@ -64,7 +64,7 @@ function setupSystem() {
       });
 
       _cache.consoleSS = operationResource.ss;
-      _cache.config = null;
+      resetConfigCache_();
       _cache.ss = {};
 
       setupStep_('Validation 및 서식', function () { 설치_2_시트정비(true); });
@@ -347,6 +347,7 @@ function renderGuideSheet_(ss, folders) {
     ['6. 위치 관리', '대시보드의 위치 미지정 경고를 확인하고 「📍 위치 관리 → 위치 미지정 상품」에서 위치를 입력해 저장합니다.'],
     ['7. 취소/오류', '문제가 있으면 주문을 선택해 취소합니다. 시스템이 출고 또는 예약 상태에 맞춰 재고를 한 번만 복원합니다.'],
     ['8. 백업 및 정리', '월 1회 또는 필요할 때 「⚙ 관리 → 백업 및 정리」를 실행합니다. 전체 Spreadsheet 백업이 검증된 뒤 오래된 완료 데이터와 Success/Error/Output 파일을 정리하고 결과 이메일을 보냅니다. 백업 실패 시 아무것도 삭제하지 않습니다.'],
+    ['9. 설정', '「⚙ 관리 → 설정」에서 알림 이메일과 정리 보존일수를 관리합니다. 폴더와 Spreadsheet ID는 시스템 설치 / 복구가 자동으로 연결하므로 일반적으로 수정하지 않아도 됩니다.'],
     ['', ''],
     ['폴더', 'Input=입력 · Success=성공 원본 · Error=실패 원본 · Output=피킹 PDF · Backup=전체 시스템 백업'],
     ['긴급 작업', '상단 「📦 Polar Penguin」 메뉴에서 Input 즉시 처리 또는 피킹지시서 조회/재출력을 실행할 수 있습니다.']
@@ -422,11 +423,11 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   managed.push(['파라미터', '백업폴더ID', folders.backup.getId(), '전체 Spreadsheet 백업', exactFolder(folders.backup)]);
 
   var defaults = [
-    ['파라미터', '폴링주기(분)', 5, '변경 후 setupSystem 재실행'],
+    ['파라미터', '폴링주기(분)', 5, 'Input 자동 확인 주기. 변경 후 시스템 설치 / 복구를 실행하세요.'],
     ['파라미터', '지시번호접두어', 'PK', '배치번호 형식'],
     ['파라미터', '재고경고임계치', 3, '통합 대시보드 재고 경고 기준'],
-    ['파라미터', '알림이메일', '', '시스템 오류 및 유지보수 알림 수신자'],
-    ['파라미터', '정리보존일수', 30, '완료 데이터와 Success/Error/Output 보존 일수']
+    ['파라미터', '알림이메일', '', '오류 및 백업/정리 결과를 받을 이메일 주소'],
+    ['파라미터', '정리보존일수', 30, '완료/취소 주문과 오래된 Success/Error/Output 정리 기준']
   ];
   installAliases_().forEach(function (entry) { defaults.push(['별칭', entry[0], entry[1], '']); });
 
@@ -435,17 +436,9 @@ function ensureSetupConfig_(consoleSs, folders, resources, report) {
   if (result.additions.length) {
     sheet.getRange(Math.max(sheet.getLastRow() + 1, 2), 1, result.additions.length, 4).setValues(result.additions);
   }
-  var configRows = sheet.getDataRange().getValues();
-  for (var i = 1; i < configRows.length; i++) {
-    var section = String(configRows[i][0] || '').trim(), key = String(configRows[i][1] || '').trim();
-    var systemManaged = section === '파일ID' || section === '시트명' ||
-      ['통합Input폴더ID', 'Success폴더ID', 'Error폴더ID', 'Output폴더ID', '백업폴더ID'].indexOf(key) >= 0;
-    sheet.getRange(i + 1, 3).setBackground(systemManaged ? 'F2F2F2' : 'FFF9E6')
-      .setNote(systemManaged ? 'SYSTEM-MANAGED: setupSystem이 유효성을 관리합니다.' : 'USER-MANAGED: 운영자가 변경할 수 있습니다.');
-  }
-  sheet.setFrozenRows(1);
-  sheet.autoResizeColumns(1, 4);
-  _cache.config = null;
+  ensureSettingsHelpText_(sheet);
+  formatSettingsSheet_(sheet);
+  resetConfigCache_();
   _cache.ss = {};
   report.configuration.push('Single operational Spreadsheet registered');
   report.configuration.push('Folder IDs registered');
