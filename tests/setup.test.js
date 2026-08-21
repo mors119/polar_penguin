@@ -78,7 +78,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     setValue(value) { this.sheet.set(this.row, this.col, value); return this; }
   }
   ['setFontWeight', 'setBackground', 'setFontColor', 'setVerticalAlignment', 'setNumberFormat',
-    'setDataValidation', 'clearDataValidations', 'setHelpText', 'setFontSize', 'setWrap', 'merge', 'setNote'].forEach((method) => {
+    'setHorizontalAlignment', 'setDataValidation', 'clearDataValidations', 'setHelpText', 'setFontSize',
+    'setWrap', 'merge', 'breakApart', 'setNote'].forEach((method) => {
     FakeRange.prototype[method] = function noop() { return this; };
   });
 
@@ -121,6 +122,7 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
     clearContents() { this.cells.clear(); return this; }
     clearFormats() { return this; }
     setFrozenRows() { return this; }
+    setRowHeight() { return this; }
     autoResizeColumns() { return this; }
     setColumnWidth() { return this; }
     setHiddenGridlines() { return this; }
@@ -249,9 +251,10 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.ok(validationLists.some((values) => values.join(',') === '예약,출고완료,취소'));
   assert.ok(validationLists.some((values) => values[0] === 'EMAIL'));
   assert.ok(validationLists.some((values) => values[0] === 'FORMULA' && values[1].includes('MOD(C')));
-  assert.match(operationSs.getSheetByName('📖 안내').getRange(3, 1).getValue(), /Input에 파일 넣기/);
+  assert.equal(operationSs.getSheetByName('📖 안내').getRange(1, 2).getValue(), 'Polar Penguin');
+  assert.match(operationSs.getSheetByName('📖 안내').getRange(5, 3).getValue(), /Input 폴더/);
   assert.ok(operationSs.getSheetByName('📖 안내').getDataRange().getValues()
-    .some(row => String(row[1] || '').includes('⚙ 관리 → 설정')));
+    .some(row => String(row[1] || '').includes('⚙ 관리')));
   const pickingHeaderColumns = operationSs.getSheetByName('피킹(헤더)').getDataRange().getValues()[0];
   assert.equal(pickingHeaderColumns.includes('카트 슬롯'), false);
   assert.equal(pickingHeaderColumns.includes('피킹담당자'), false);
@@ -341,6 +344,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.equal(operationSs.getSheetByName('처리주문아카이브').getRange(2, 2).getValue(), 'ITEM-ARCHIVE-KEEP');
   assert.equal(triggers.length, 2);
   assert.equal(triggers.find((trigger) => trigger.getHandlerFunction() === 'processInput').minutes, 15);
+  assert.equal(operationSs.getSheetByName('📖 안내').getRange(1, 2).getValue(), 'Polar Penguin',
+    'guide rendering remains idempotent on repeated setup');
 
   operationSs.deleteSheet(operationSs.getSheetByName('피킹(헤더)'));
 

@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><base target="_top"><meta charset="utf-8"><style>
+*{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:#172033;font:13px "Malgun Gothic",Arial,sans-serif}header{padding:18px 22px;background:#1f3864;color:#fff}h1{margin:0 0 4px;font-size:20px}.sub{font-size:12px;opacity:.88}main{padding:16px 20px 82px}.section{margin-bottom:13px;background:#fff;border:1px solid #d9e0e8;border-radius:7px;padding:12px 14px}.section h2{margin:0 0 9px;color:#1f3864;font-size:13px}.field-row{display:grid;grid-template-columns:155px 1fr;gap:12px;align-items:start}label{display:block;font-weight:700;padding-top:8px}.control{display:flex;align-items:center;gap:7px}input{min-width:0;width:100%;padding:8px 9px;border:1px solid #aeb9c8;border-radius:5px;background:#fff;font:inherit}input[type=number]{text-align:right}.unit{color:#4b5563;white-space:nowrap}.help{margin-top:5px;color:#6b7280;font-size:11px;line-height:1.45}.notice{color:#8a5b00}#message{display:none;margin-bottom:13px;padding:10px 12px;border-radius:5px;white-space:pre-wrap;line-height:1.5}.error{display:block!important;background:#ffe4e4;color:#8d2222}.success{display:block!important;background:#e2efda;color:#205c28}.actions{position:fixed;left:0;right:0;bottom:0;padding:13px 20px;text-align:right;background:#fff;border-top:1px solid #d9e0e8}button{border:0;border-radius:5px;padding:9px 17px;font:inherit;cursor:pointer}.secondary{margin-right:7px;background:#e8edf3;color:#24364f}.primary{background:#1f3864;color:#fff}button:disabled{opacity:.5;cursor:default}.loading{color:#6b7280;text-align:center;padding:30px}
+</style></head><body>
+<header><h1>운영 설정</h1><div class="sub">자동 처리, 피킹, 재고 알림과 정리 기준을 관리합니다.</div></header>
+<main><div id="message"></div><div id="form" class="loading">설정을 불러오는 중…</div></main>
+<div class="actions"><button class="secondary" onclick="google.script.host.close()">취소</button><button id="save" class="primary" onclick="save()" disabled>설정 저장</button></div>
+<script>
+const fields=[
+  {section:'자동 처리',key:'폴링주기(분)',label:'폴링주기',type:'number',min:1,unit:'분',help:'Input 자동 확인 주기',notice:'※ 변경 후 시스템 설치 / 복구 필요'},
+  {section:'피킹',key:'지시번호접두어',label:'지시번호접두어',type:'text',maxlength:12,help:'피킹 지시번호 앞에 붙는 짧은 문자'},
+  {section:'재고',key:'재고경고임계치',label:'재고경고임계치',type:'number',min:0,unit:'개',help:'가용재고가 이 수량 이하이면 대시보드에 경고'},
+  {section:'알림',key:'알림이메일',label:'알림이메일',type:'email',help:'오류 및 백업·정리 결과 수신 주소 · 비워 둘 수 있음'},
+  {section:'백업 및 정리',key:'정리보존일수',label:'정리보존일수',type:'number',min:1,unit:'일',help:'완료 데이터와 처리 파일을 보존할 기간'}
+];
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function showMessage(text,type){const el=document.getElementById('message');el.className=type;el.textContent=text;el.scrollIntoView({block:'nearest'})}
+function fail(error){showMessage(error&&error.message?error.message:String(error),'error');document.getElementById('save').disabled=false}
+function render(values){document.getElementById('form').className='';document.getElementById('form').innerHTML=fields.map(f=>`<section class="section"><h2>${esc(f.section)}</h2><div class="field-row"><label for="${esc(f.key)}">${esc(f.label)}</label><div><div class="control"><input id="${esc(f.key)}" type="${f.type}" value="${esc(values[f.key])}" ${f.min===undefined?'':`min="${f.min}" step="1"`} ${f.maxlength?`maxlength="${f.maxlength}"`:''}>${f.unit?`<span class="unit">${esc(f.unit)}</span>`:''}</div><div class="help">${esc(f.help)}${f.notice?`<br><span class="notice">${esc(f.notice)}</span>`:''}</div></div></div></section>`).join('');document.getElementById('save').disabled=false}
+function save(){const button=document.getElementById('save');button.disabled=true;const payload={};fields.forEach(f=>payload[f.key]=document.getElementById(f.key).value);google.script.run.withSuccessHandler(result=>{showMessage(result.message,'success');button.disabled=false}).withFailureHandler(fail).saveOperatorSettings(payload)}
+google.script.run.withSuccessHandler(render).withFailureHandler(fail).getOperatorSettings();
+</script></body></html>

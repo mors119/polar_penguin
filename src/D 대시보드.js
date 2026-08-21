@@ -94,35 +94,78 @@ function D0_대시보드전체갱신(silent) {
 }
 
 function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
-  var sh = ensureDashSheet_(ss, '📊 대시보드'); sh.clear(); sh.clearFormats();
-  if (sh.getMaxColumns() < 10) sh.insertColumnsAfter(sh.getMaxColumns(), 10 - sh.getMaxColumns());
-  sh.getRange(1, 1, 1, 10).merge().setValue('📊  Polar Penguin 통합 대시보드')
-    .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
-  sh.getRange(2, 1, 1, 10).merge().setValue('최근 갱신 ' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss') +
+  var sh = ensureDashSheet_(ss, '📊 대시보드');
+  try { sh.getDataRange().breakApart(); } catch (ignore) { }
+  sh.clear(); sh.clearFormats();
+  if (sh.getMaxColumns() < 12) sh.insertColumnsAfter(sh.getMaxColumns(), 12 - sh.getMaxColumns());
+  sh.getRange(1, 1, 1, 12).merge().setValue('📊  Polar Penguin 통합 대시보드')
+    .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목)
+    .setVerticalAlignment('middle');
+  sh.getRange(2, 1, 1, 12).merge().setValue('최근 갱신 ' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss') +
     '  ·  최근 백업 ' + (operation.lastBackup || '백업 없음'));
-  dashboardSection_(sh, 4, '입력', [['최근 처리', operation.latestTime], ['최근 결과', operation.latestResult], ['경고', operation.warning]]);
-  dashboardSection_(sh, 9, '주문', [['예약', order.예약], ['출고완료', order.출고완료], ['취소', order.취소], ['전체', order.전체]]);
-  dashboardSection_(sh, 14, '예약', [['예약 주문', order.예약전체], ['예약 수량', order.예약수량], ['출고 가능 주문', order.예약출고가능], ['가용 예약 SKU', order.예약출고가능SKU], ['재고 부족 주문', order.예약부족]]);
-  dashboardSection_(sh, 19, '출력', [['오늘 생성된 피킹지시', picking.오늘지시], ['오늘 출고 처리 수량', picking.오늘출고수량], ['출력 오류', picking.kpi.출력오류]]);
-  dashboardSection_(sh, 24, '재고', [['가용재고', stock.총가용], ['품절(T)', stock.품절], ['음수 순재고(F)', stock.음수허용], ['위치 미지정 상품', stock.위치미지정], ['예약 부족 SKU', stock.예약부족SKU.length]]);
-  sh.getRange(28, 1, 1, 10).merge().setValue('위치 미지정 상품 ' + stock.위치미지정 + '건 — 📍 위치 관리 → 위치 미지정 상품')
-    .setWrap(true).setBackground(stock.위치미지정 ? DASHCOLOR.경고 : DASHCOLOR.좋음);
-  sh.getRange(30, 1, 1, 10).merge().setValue('최근 오류').setFontWeight('bold').setBackground(DASHCOLOR.제목).setFontColor('FFFFFF');
-  sh.getRange(31, 1, 1, 10).merge().setValue(operation.recentErrors.join(' / ') || '없음').setWrap(true)
-    .setBackground(operation.recentErrors.length ? DASHCOLOR.경고 : DASHCOLOR.좋음);
-  sh.getRange(33, 1, 1, 10).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / ')).setWrap(true).setBackground(order.권고.색);
-  sh.getRange(35, 1, 1, 10).merge().setValue('빠른 작업 (셀은 버튼이 아닙니다 — 상단 메뉴에서 실행)').setFontWeight('bold').setBackground(DASHCOLOR.경고);
-  sh.getRange(36, 1, 1, 8).setValues([['파일 입력: Drive Input', '', 'Input 지금 처리', '', '예약상품 입고 관리', '', '피킹지시서 재출력', '']]).setFontWeight('bold');
-  [1, 3, 5, 7].forEach(function (col) { sh.getRange(36, col, 1, 2).merge(); });
-  for (var c = 1; c <= 10; c++) sh.setColumnWidth(c, c % 2 ? 120 : 90);
+  var pendingOrders = Math.max(0, Number(order.전체 || 0) - Number(order.출고완료 || 0) - Number(order.취소 || 0));
+  var errorCount = Number(picking.kpi.출력오류 || 0) + (operation.recentErrors || []).length;
+  var kpis = [
+    ['대기 주문', pendingOrders, pendingOrders ? DASHCOLOR.경고 : DASHCOLOR.카드],
+    ['피킹 대기', picking.작업대상주문, picking.작업대상주문 ? DASHCOLOR.경고 : DASHCOLOR.카드],
+    ['출고 완료', order.출고완료, DASHCOLOR.좋음],
+    ['예약 주문', order.예약전체, order.예약전체 ? DASHCOLOR.경고 : DASHCOLOR.카드],
+    ['재고 경고', stock.부족.length, stock.부족.length ? DASHCOLOR.경고 : DASHCOLOR.카드],
+    ['처리 오류', errorCount, errorCount ? DASHCOLOR.위험 : DASHCOLOR.좋음]
+  ];
+  kpis.forEach(function (item, index) { dashboardKpiCard_(sh, 4, index * 2 + 1, item[0], item[1], item[2]); });
+
+  dashboardDetailSection_(sh, 8, 1, '처리 필요', [
+    ['대기 주문', pendingOrders], ['피킹 대기', picking.작업대상주문],
+    ['오늘 생성 피킹지시', picking.오늘지시], ['오늘 출고 수량', picking.오늘출고수량],
+    ['위치 미지정', stock.위치미지정]
+  ]);
+  dashboardDetailSection_(sh, 8, 7, '재고 경고', [
+    ['경고 SKU', stock.부족.length], ['품절(T)', stock.품절], ['음수 순재고(F)', stock.음수허용],
+    ['예약 부족 SKU', stock.예약부족SKU.length], ['총 가용재고', stock.총가용]
+  ]);
+  dashboardDetailSection_(sh, 15, 1, '예약 대기', [
+    ['예약 주문', order.예약전체], ['예약 수량', order.예약수량], ['출고 가능 주문', order.예약출고가능],
+    ['가용 예약 SKU', order.예약출고가능SKU], ['재고 부족 주문', order.예약부족]
+  ]);
+  dashboardDetailSection_(sh, 15, 7, '최근 처리', [
+    ['처리 시각', operation.latestTime], ['처리 결과', operation.latestResult], ['입력 경고', operation.warning],
+    ['전체 주문', order.전체], ['취소 주문', order.취소]
+  ]);
+
+  sh.getRange(22, 1, 1, 12).merge().setValue('운영 알림').setFontWeight('bold')
+    .setBackground(DASHCOLOR.제목).setFontColor('FFFFFF');
+  sh.getRange(23, 1, 1, 12).merge().setValue(operation.recentErrors.join(' / ') || '최근 처리 오류 없음').setWrap(true)
+    .setBackground(errorCount ? DASHCOLOR.위험 : DASHCOLOR.좋음);
+  sh.getRange(25, 1, 1, 12).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / '))
+    .setWrap(true).setBackground(order.권고.색);
+  sh.getRange(27, 1, 1, 12).merge().setValue('빠른 작업 · 셀은 버튼이 아닙니다. 상단 📦 Polar Penguin 메뉴에서 실행하세요.')
+    .setFontWeight('bold').setBackground(DASHCOLOR.헤더);
+  sh.getRange(28, 1, 1, 12).setValues([['Drive Input', '', '', 'Input 지금 처리', '', '', '예약상품 입고 관리', '', '', '피킹지시서 재출력', '', '']])
+    .setFontWeight('bold').setHorizontalAlignment('center');
+  [1, 4, 7, 10].forEach(function (col) { sh.getRange(28, col, 1, 3).merge(); });
+  for (var c = 1; c <= 12; c++) sh.setColumnWidth(c, 78);
+  sh.setRowHeight(1, 38); sh.setRowHeight(4, 30); sh.setRowHeight(5, 48);
+  [8, 15, 22, 27].forEach(function (row) { sh.setRowHeight(row, 28); });
+  sh.setRowHeight(23, 40); sh.setRowHeight(25, 42); sh.setRowHeight(28, 34);
   sh.setFrozenRows(2); sh.setHiddenGridlines(true); return sh;
 }
 
-function dashboardSection_(sh, row, title, items) {
-  sh.getRange(row, 1, 1, 10).merge().setValue(title).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
-  items.forEach(function (item, i) {
-    var col = 1 + i * 2;
-    sh.getRange(row + 1, col, 1, 2).merge().setValue(item[0]).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
-    sh.getRange(row + 2, col, 1, 2).merge().setValue(item[1]).setFontSize(16).setFontWeight('bold').setBackground(DASHCOLOR.카드);
+function dashboardKpiCard_(sheet, row, column, label, value, color) {
+  sheet.getRange(row, column, 1, 2).merge().setValue(label).setFontWeight('bold')
+    .setHorizontalAlignment('center').setVerticalAlignment('middle').setBackground(DASHCOLOR.헤더);
+  sheet.getRange(row + 1, column, 1, 2).merge().setValue(value).setFontSize(19).setFontWeight('bold')
+    .setHorizontalAlignment('center').setVerticalAlignment('middle').setBackground(color);
+}
+
+function dashboardDetailSection_(sheet, row, column, title, items) {
+  sheet.getRange(row, column, 1, 6).merge().setValue(title).setFontWeight('bold')
+    .setFontColor('FFFFFF').setBackground(DASHCOLOR.제목).setVerticalAlignment('middle');
+  items.forEach(function (item, index) {
+    var itemRow = row + index + 1;
+    sheet.getRange(itemRow, column, 1, 4).merge().setValue(item[0]).setBackground(DASHCOLOR.카드)
+      .setVerticalAlignment('middle');
+    sheet.getRange(itemRow, column + 4, 1, 2).merge().setValue(item[1]).setFontWeight('bold')
+      .setHorizontalAlignment(typeof item[1] === 'number' ? 'right' : 'left').setVerticalAlignment('middle');
   });
 }
