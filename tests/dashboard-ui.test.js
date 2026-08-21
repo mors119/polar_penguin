@@ -80,7 +80,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
   context.Logger = { log() {} };
   context.onOpen();
   assert.ok(menuNames.includes('📦 Polar Penguin'));
-  for (const expected of ['processInput', '선택_주문취소', '예약_주문피킹관리',
+  for (const expected of ['processInput', '선택_주문취소', '예약상품_입고관리',
     'S9_1_작업지시서출력', 'D0_대시보드전체갱신', '진단_시트구조',
     '위치_미지정상품관리', 'setupSystem', '설정_열기', '백업_및_정리', '정리_로그']) {
     assert.ok(handlers.includes(expected), `${expected} is missing from the menu`);
