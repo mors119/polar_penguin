@@ -328,37 +328,70 @@ function hideInternalSheets_(ss) {
 /** 안내 탭은 시스템이 관리하는 설명 영역이며 setup 재실행 때 현재 구조로 다시 그린다. */
 function renderGuideSheet_(ss, folders) {
   var sh = ensureInstallSheet_(ss, '📖 안내', []);
+  try { sh.getDataRange().breakApart(); } catch (ignore) { }
   sh.clearContents();
   sh.clearFormats();
-  if (sh.getMaxColumns() < 8) sh.insertColumnsAfter(sh.getMaxColumns(), 8 - sh.getMaxColumns());
+  if (sh.getMaxColumns() < 7) sh.insertColumnsAfter(sh.getMaxColumns(), 7 - sh.getMaxColumns());
 
-  sh.getRange(1, 1, 1, 8).merge().setValue('📖  Polar Penguin 운영 안내')
-    .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
-  sh.getRange(3, 1, 1, 8).merge().setValue(
-    'Input에 파일 넣기  →  자동 처리  →  PDF 생성  →  재고/출고 자동 반영'
-  ).setWrap(true).setBackground(DASHCOLOR.카드).setFontWeight('bold');
+  sh.getRange(1, 2, 1, 5).merge().setValue('Polar Penguin')
+    .setFontSize(20).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목)
+    .setVerticalAlignment('middle');
+  sh.getRange(2, 2, 1, 5).merge().setValue('물류 주문 · 재고 · 피킹 자동화 시스템')
+    .setFontSize(11).setFontColor('FFFFFF').setBackground(DASHCOLOR.제목);
 
-  var rows = [
-    ['1. 파일 넣기', '주문 또는 재고 파일을 Drive의 Input 폴더에 업로드합니다. 파일 종류를 구분할 필요가 없습니다.'],
-    ['2. 자동 처리', '시스템이 유형 판별, 검증, 재고/주문 처리, 재고 확정, 피킹 생성, PDF 생성, Success 이동을 자동 실행합니다.'],
-    ['3. 피킹/포장', 'PDF의 「창고 피킹 요약」에서 상품별 총수량을 피킹하고, 「주문별 포장 / 송장 확인」에서 고객정보와 송장을 대조해 포장합니다.'],
-    ['4. 자동 출고 반영', 'PDF가 준비되면 피킹 라인/헤더와 주문이 출고완료로 바뀝니다. 재고는 주문 확정 시 한 번만 반영됩니다.'],
-    ['5. 예약상품 입고', 'Input 파일이 없는 실물 입고는 「예약상품 입고 관리」에서 F 상품과 입고 delta를 입력합니다. 새 입고와 기존 미사용 물리 재고로 FIFO 대상만 피킹 PDF가 생성됩니다.'],
-    ['6. 위치 관리', '대시보드의 위치 미지정 경고를 확인하고 「📍 위치 관리 → 위치 미지정 상품」에서 위치를 입력해 저장합니다.'],
-    ['7. 취소/오류', '문제가 있으면 주문을 선택해 취소합니다. 시스템이 출고 또는 예약 상태에 맞춰 재고를 한 번만 복원합니다.'],
-    ['8. 백업 및 정리', '월 1회 또는 필요할 때 「⚙ 관리 → 백업 및 정리」를 실행합니다. 전체 Spreadsheet 백업이 검증된 뒤 오래된 완료 데이터와 Success/Error/Output 파일을 정리하고 결과 이메일을 보냅니다. 백업 실패 시 아무것도 삭제하지 않습니다.'],
-    ['9. 설정', '「⚙ 관리 → 설정」에서 알림 이메일과 정리 보존일수를 관리합니다. 폴더와 Spreadsheet ID는 시스템 설치 / 복구가 자동으로 연결하므로 일반적으로 수정하지 않아도 됩니다.'],
-    ['', ''],
-    ['폴더', 'Input=입력 · Success=성공 원본 · Error=실패 원본 · Output=피킹 PDF · Backup=전체 시스템 백업'],
-    ['긴급 작업', '상단 「📦 Polar Penguin」 메뉴에서 Input 즉시 처리 또는 피킹지시서 조회/재출력을 실행할 수 있습니다.']
+  guideSectionHeader_(sh, 4, '빠른 시작');
+  var quickStart = [
+    ['1', 'Input 폴더에 주문 또는 재고 파일 업로드'],
+    ['2', '📥 Input → Input 지금 처리'],
+    ['3', '📊 대시보드에서 처리 결과와 경고 확인'],
+    ['4', '생성된 피킹지시서에서 피킹 · 포장 진행']
   ];
-  sh.getRange(5, 1, rows.length, 2).setValues(rows).setWrap(true);
-  sh.getRange(5, 1, 1, 2).setFontWeight('bold').setBackground(DASHCOLOR.헤더);
-  sh.setColumnWidth(1, 150);
-  sh.setColumnWidth(2, 620);
-  sh.setFrozenRows(1);
+  quickStart.forEach(function (item, index) {
+    var row = 5 + index;
+    sh.getRange(row, 2).setValue(item[0]).setFontWeight('bold').setHorizontalAlignment('center')
+      .setBackground(DASHCOLOR.카드);
+    sh.getRange(row, 3, 1, 4).merge().setValue(item[1]).setWrap(true).setVerticalAlignment('middle');
+    sh.setRowHeight(row, 30);
+  });
+
+  guideSectionHeader_(sh, 10, '주요 메뉴');
+  var menus = [
+    ['📥 Input', '주문 / 재고 파일 처리'],
+    ['📋 주문', '주문 취소 / 예약상품 입고 관리'],
+    ['📄 피킹지시서', '조회 / 재출력'],
+    ['📍 위치 관리', '위치 미지정 상품 확인'],
+    ['📊 운영', '대시보드 / 시스템 상태 확인'],
+    ['⚙ 관리', '설정 / 설치·복구 / 백업·정리']
+  ];
+  menus.forEach(function (item, index) {
+    var row = 11 + index;
+    sh.getRange(row, 2, 1, 2).merge().setValue(item[0]).setFontWeight('bold')
+      .setBackground(DASHCOLOR.카드).setVerticalAlignment('middle');
+    sh.getRange(row, 4, 1, 3).merge().setValue(item[1]).setWrap(true).setVerticalAlignment('middle');
+    sh.setRowHeight(row, 31);
+  });
+
+  guideSectionHeader_(sh, 18, '운영 참고');
+  sh.getRange(19, 2, 1, 2).merge().setValue('처리 폴더').setFontWeight('bold').setBackground(DASHCOLOR.카드);
+  sh.getRange(19, 4, 1, 3).merge().setValue('Input · Success · Error · Output · Backup').setWrap(true);
+  sh.getRange(20, 2, 1, 2).merge().setValue('문제 발생 시').setFontWeight('bold').setBackground(DASHCOLOR.카드);
+  sh.getRange(20, 4, 1, 3).merge().setValue('📊 운영 → 시스템 상태 확인 후 필요한 복구 메뉴를 실행합니다.').setWrap(true);
+
+  sh.setColumnWidth(1, 28);
+  sh.setColumnWidth(2, 145);
+  [3, 4, 5, 6].forEach(function (column) { sh.setColumnWidth(column, 125); });
+  sh.setColumnWidth(7, 28);
+  sh.setRowHeight(1, 38);
+  sh.setRowHeight(2, 24);
+  sh.setFrozenRows(2);
   sh.setHiddenGridlines(true);
   return sh;
+}
+
+function guideSectionHeader_(sheet, row, title) {
+  sheet.getRange(row, 2, 1, 5).merge().setValue(title).setFontWeight('bold')
+    .setFontColor('FFFFFF').setBackground(DASHCOLOR.제목).setVerticalAlignment('middle');
+  sheet.setRowHeight(row, 28);
 }
 
 function missingInstallHeaders_(current, required, acceptAliases) {

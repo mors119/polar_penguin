@@ -25,7 +25,7 @@ test('integrated dashboard renderer writes the real dashboard tab and visible ac
     Range.prototype[method] = function noop() { return this; };
   }
   const sheet = {
-    clear() {}, clearFormats() {}, getMaxColumns: () => 10,
+    clear() {}, clearFormats() {}, getMaxColumns: () => 10, insertColumnsAfter() {},
     getRange: (row, col) => new Range(row, col),
     setRowHeight() {}, setColumnWidth() {}, setFrozenRows() {}, setHiddenGridlines() {}
   };
@@ -33,20 +33,29 @@ test('integrated dashboard renderer writes the real dashboard tab and visible ac
   const ss = { getSheetByName(name) { requested.push(name); return name === '📊 대시보드' ? sheet : null; } };
   context.Utilities = { formatDate: () => '2026-08-19 10:00:00' };
   context.tz_ = () => 'Asia/Seoul';
-  context.renderIntegratedDashboard_(ss,
-    { 예약: 3, 취소: 4, 출고완료: 5, 전체: 12,
+  const order = { 예약: 3, 취소: 4, 출고완료: 5, 전체: 12,
       예약전체: 3, 예약수량: 8, 예약출고가능: 1, 예약출고가능SKU: 1, 예약부족: 2,
-      권고: { 제목: '주문 확정', 내용: ['확인'], 색: 'FFFFFF' } },
-    { 총가용: 100, 부족: [1], 품절: 2, 음수허용: 1, 위치미지정: 3, 예약부족SKU: [1] },
-    { 전체라인: 8, 처리라인: 6, 미처리라인: 2, 진행률: 75, 작업대상주문: 1,
-      오늘지시: 2, 오늘출고수량: 10, kpi: { 출력오류: 0 } },
-    { latestTime: '2026-08-19 09:55', latestResult: 'PROCESSED · orders.csv', warning: '없음', recentErrors: [] });
+      권고: { 제목: '주문 확정', 내용: ['확인'], 색: 'FFFFFF' } };
+  const stock = { 총가용: 100, 부족: [1], 품절: 2, 음수허용: 1, 위치미지정: 3, 예약부족SKU: [1] };
+  const picking = { 전체라인: 8, 처리라인: 6, 미처리라인: 2, 진행률: 75, 작업대상주문: 1,
+    오늘지시: 2, 오늘출고수량: 10, kpi: { 출력오류: 0 } };
+  const operation = { latestTime: '2026-08-19 09:55', latestResult: 'PROCESSED · orders.csv', warning: '없음', recentErrors: [] };
+  const before = JSON.stringify({ order, stock, picking, operation });
+  context.renderIntegratedDashboard_(ss, order, stock, picking, operation);
   assert.deepEqual(requested, ['📊 대시보드']);
   assert.equal(cells.get('1:1'), '📊  Polar Penguin 통합 대시보드');
-  assert.equal(cells.get('31:1'), '없음');
-  assert.match(cells.get('35:1'), /셀은 버튼이 아닙니다/);
-  assert.match(cells.get('28:1'), /위치 미지정 상품 3건/);
-  assert.equal(cells.get('36:3'), 'Input 지금 처리');
+  assert.equal(cells.get('4:1'), '대기 주문');
+  assert.equal(cells.get('5:1'), 3);
+  assert.equal(cells.get('4:11'), '처리 오류');
+  assert.equal(cells.get('5:11'), 0);
+  assert.equal(cells.get('8:1'), '처리 필요');
+  assert.equal(cells.get('8:7'), '재고 경고');
+  assert.equal(cells.get('15:1'), '예약 대기');
+  assert.equal(cells.get('15:7'), '최근 처리');
+  assert.match(cells.get('27:1'), /셀은 버튼이 아닙니다/);
+  assert.equal(cells.get('28:4'), 'Input 지금 처리');
+  assert.equal(JSON.stringify({ order, stock, picking, operation }), before,
+    'rendering must not mutate or recalculate dashboard metrics');
 });
 
 test('stock dashboard count reflects products whose warehouse location is blank', () => {
@@ -112,41 +121,37 @@ test('onOpen registers the current menu and every handler exists in source', () 
   }
 });
 
-test('settings menu shows and activates only the existing settings sheet without changing data', () => {
+test('settings menu opens the HTML modal without exposing or changing the raw settings sheet', () => {
   const values = [
     ['구분', '키', '값', '비고'],
     ['파라미터', '알림이메일', 'operator@example.com', '알림 수신자'],
     ['파라미터', '정리보존일수', 45, '보존 기준']
   ];
-  let activatedCell = null;
   const settings = {
     hidden: true,
     getLastRow: () => values.length,
     getRange(row, col, rows = 1, cols = 1) {
       return {
         getValues: () => Array.from({ length: rows }, (_, r) =>
-          Array.from({ length: cols }, (_, c) => values[row - 1 + r][col - 1 + c])),
-        activate: () => { activatedCell = [row, col]; }
+          Array.from({ length: cols }, (_, c) => values[row - 1 + r][col - 1 + c]))
       };
-    },
-    showSheet() { this.hidden = false; }
+    }
   };
   const internal = { hidden: true };
-  let activeSheet = null;
-  const ss = {
-    getSheetByName: name => name === '설정' ? settings : internal,
-    setActiveSheet: sheet => { activeSheet = sheet; }
-  };
+  const ss = { getSheetByName: name => name === '설정' ? settings : internal };
   const before = JSON.stringify(values);
-  let formatted = null;
+  let dialog = null;
   context.consoleSS_ = () => ss;
-  context.formatSettingsSheet_ = sheet => { formatted = sheet; return sheet; };
+  context.HtmlService = { createHtmlOutputFromFile: name => ({
+    name, setWidth(width) { this.width = width; return this; }, setHeight(height) { this.height = height; return this; }
+  }) };
+  context.SpreadsheetApp = { getUi: () => ({ showModalDialog: (html, title) => { dialog = { html, title }; } }) };
   const result = context.설정_열기();
-  assert.equal(result, settings);
-  assert.equal(formatted, settings);
-  assert.equal(settings.hidden, false);
-  assert.equal(activeSheet, settings);
-  assert.deepEqual(activatedCell, [2, 3]);
+  assert.equal(result, true);
+  assert.equal(dialog.html.name, 'Settings');
+  assert.equal(dialog.title, 'Polar Penguin 설정');
+  assert.equal(dialog.html.width, 560);
+  assert.equal(settings.hidden, true);
   assert.equal(internal.hidden, true);
   assert.equal(JSON.stringify(values), before);
 });

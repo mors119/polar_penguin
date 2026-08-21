@@ -173,4 +173,6 @@ test('public server RPCs for Reservation and Cancellation work as expected', () 
   assert.equal(typeof context.선택_주문취소, 'function');
   assert.equal(typeof context.설정_열기, 'function');
   assert.equal(typeof context.설정_보기, 'function');
+  assert.equal(typeof context.getOperatorSettings, 'function');
+  assert.equal(typeof context.saveOperatorSettings, 'function');
 });

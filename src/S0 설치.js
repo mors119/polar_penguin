@@ -435,27 +435,102 @@ function onOpen(e) {
   }
 }
 
-/** 숨김 설정 탭만 표시하고 운영자가 가장 먼저 확인할 알림 설정으로 이동한다. */
+/** 운영자 설정은 숨김 원본 시트 대신 전용 모달에서 관리한다. */
 function 설정_열기() {
   var ss = consoleSS_(), sheet = ss.getSheetByName(CONSOLE.설정);
   if (!sheet) {
     alert_('설정 시트를 찾을 수 없습니다.\n⚙ 관리 → 시스템 설치 / 복구를 실행하세요.');
     return null;
   }
-
-  formatSettingsSheet_(sheet);
-  if (typeof sheet.showSheet === 'function') sheet.showSheet();
-  if (typeof ss.setActiveSheet === 'function') ss.setActiveSheet(sheet);
-
-  var targetRow = findSettingsRow_(sheet, '파라미터', '알림이메일') || 1;
-  var targetColumn = targetRow === 1 ? 1 : 3;
-  var target = sheet.getRange(targetRow, targetColumn);
-  if (target && typeof target.activate === 'function') target.activate();
-  return sheet;
+  var html = HtmlService.createHtmlOutputFromFile('Settings').setWidth(560).setHeight(680);
+  SpreadsheetApp.getUi().showModalDialog(html, 'Polar Penguin 설정');
+  return true;
 }
 
 /** 이전 배포나 직접 호출에서 사용하던 함수명은 동일 동작으로 유지한다. */
 function 설정_보기() { return 설정_열기(); }
+
+var OPERATOR_SETTING_DEFINITIONS = [
+  { key: '폴링주기(분)', type: 'positiveInteger' },
+  { key: '지시번호접두어', type: 'prefix' },
+  { key: '재고경고임계치', type: 'nonNegativeInteger' },
+  { key: '알림이메일', type: 'email' },
+  { key: '정리보존일수', type: 'positiveInteger' }
+];
+
+/** HtmlService에서 호출하는 공개 조회 API. 원본 설정 시트의 현재 값만 반환한다. */
+function getOperatorSettings() {
+  var sheet = consoleSS_().getSheetByName(CONSOLE.설정);
+  if (!sheet) throw new Error('설정 시트를 찾을 수 없습니다. ⚙ 관리 → 시스템 설치 / 복구를 실행하세요.');
+  var values = {};
+  OPERATOR_SETTING_DEFINITIONS.forEach(function (definition) {
+    var row = findSettingsRow_(sheet, '파라미터', definition.key);
+    if (!row) throw new Error('설정 항목을 찾을 수 없습니다: ' + definition.key);
+    values[definition.key] = sheet.getRange(row, 3).getValue();
+  });
+  return values;
+}
+
+/** HtmlService에서 호출하는 공개 저장 API. 지정된 5개 파라미터 셀만 변경한다. */
+function saveOperatorSettings(payload) {
+  return withLock_(function () {
+    var normalized = validateOperatorSettings_(payload);
+    var sheet = consoleSS_().getSheetByName(CONSOLE.설정);
+    if (!sheet) throw new Error('설정 시트를 찾을 수 없습니다. ⚙ 관리 → 시스템 설치 / 복구를 실행하세요.');
+
+    var rows = {}, current = {};
+    OPERATOR_SETTING_DEFINITIONS.forEach(function (definition) {
+      var row = findSettingsRow_(sheet, '파라미터', definition.key);
+      if (!row) throw new Error('설정 항목을 찾을 수 없습니다: ' + definition.key);
+      rows[definition.key] = row;
+      current[definition.key] = sheet.getRange(row, 3).getValue();
+    });
+
+    var changedFields = [];
+    OPERATOR_SETTING_DEFINITIONS.forEach(function (definition) {
+      var key = definition.key;
+      if (String(current[key]) === String(normalized[key])) return;
+      sheet.getRange(rows[key], 3).setValue(normalized[key]);
+      changedFields.push(key);
+    });
+    if (changedFields.length) resetConfigCache_();
+
+    var pollingChanged = changedFields.indexOf('폴링주기(분)') >= 0;
+    return {
+      values: normalized,
+      changedFields: changedFields,
+      pollingChanged: pollingChanged,
+      message: pollingChanged
+        ? '폴링주기가 변경되었습니다.\n변경된 자동 확인 주기를 적용하려면\n⚙ 관리 → 시스템 설치 / 복구를 실행하세요.'
+        : (changedFields.length ? '설정을 저장했습니다.' : '변경된 설정이 없습니다.')
+    };
+  });
+}
+
+function validateOperatorSettings_(payload) {
+  payload = payload || {};
+  var out = {}, errors = [];
+  OPERATOR_SETTING_DEFINITIONS.forEach(function (definition) {
+    var key = definition.key;
+    var raw = payload[key] === undefined || payload[key] === null ? '' : String(payload[key]).trim();
+    if (definition.type === 'positiveInteger') {
+      if (!/^\d+$/.test(raw) || Number(raw) < 1) errors.push(key + ': 1 이상의 정수를 입력하세요.');
+      else out[key] = Number(raw);
+    } else if (definition.type === 'nonNegativeInteger') {
+      if (!/^\d+$/.test(raw)) errors.push(key + ': 0 이상의 정수를 입력하세요.');
+      else out[key] = Number(raw);
+    } else if (definition.type === 'prefix') {
+      if (!raw) errors.push(key + ': 값을 입력하세요.');
+      else if (raw.length > 12 || /[\r\n\t]/.test(raw)) errors.push(key + ': 12자 이내의 짧은 문자열을 입력하세요.');
+      else out[key] = raw;
+    } else if (definition.type === 'email') {
+      if (raw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) errors.push(key + ': 올바른 이메일 주소를 입력하거나 비워 두세요.');
+      else out[key] = raw;
+    }
+  });
+  if (errors.length) throw new Error(errors.join('\n'));
+  return out;
+}
 
 function findSettingsRow_(sheet, section, key) {
   if (!sheet || sheet.getLastRow() < 2) return 0;
