@@ -113,12 +113,12 @@ function buildPickingDocumentData_(instructionNo) {
   var O = {
     orderNo: col_(orders, COL.주문번호, true), itemNo: col_(orders, COL.품목별주문번호, true),
     orderDate: S9_optionalColumn_(orders, ['주문일시', '주문일자', '주문일', '결제일시']),
-    recipient: S9_optionalColumn_(orders, ['수령인', '수령인명', '수령인 이름']),
-    phone: S9_optionalColumn_(orders, ['수령인 휴대전화', '수령인 휴대폰', '수령인휴대전화', '휴대전화']),
-    postal: S9_optionalColumn_(orders, ['수령인 우편번호', '수령인우편번호', '우편번호']),
-    address: S9_optionalColumn_(orders, ['수령인 주소', '수령인 주소(전체)', '수령인주소', '기본주소']),
+    recipient: col_(orders, COL.수령인, true),
+    phone: col_(orders, COL.수령인휴대전화, true),
+    postal: col_(orders, COL.수령인우편번호, true),
+    address: col_(orders, COL.수령인주소전체, true),
     detailAddress: S9_optionalColumn_(orders, ['상세주소', '수령인 상세주소']),
-    message: S9_optionalColumn_(orders, ['배송메시지', '배송 메세지', '배송 요청사항'])
+    message: col_(orders, COL.배송메시지, true)
   };
   var itemOrder = {}, orderMeta = {};
   orders.rows.forEach(function (row) {

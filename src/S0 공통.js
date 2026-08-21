@@ -48,9 +48,20 @@ var COL = {
   최종동기화: '최종동기화',
 
   // ---------- 주문 (완료) ----------
+  쇼핑몰: '쇼핑몰',
+  쇼핑몰번호: '쇼핑몰번호',
   주문번호: '주문번호',
   품목별주문번호: '품목별 주문번호',
+  배송메시지: '배송메시지',
+  총주문금액: '총 주문금액(KRW)',
+  총결제금액: '총 결제금액(KRW)',
+  주문상품명: '주문상품명(기본)',
+  상품옵션기본: '상품옵션(기본)',
   수량: '수량',
+  수령인: '수령인',
+  수령인휴대전화: '수령인 휴대전화',
+  수령인우편번호: '수령인 우편번호',
+  수령인주소전체: '수령인 주소(전체)',
   출고완료: '출고완료',
   피킹지시번호: '피킹지시번호',
   주문상태: '주문상태',
@@ -59,6 +70,7 @@ var COL = {
   취소경로: '취소경로',
   확정일시: '확정일시',
   대기사유: '대기사유',
+  운영메모: '운영메모',
 
   // ---------- 피킹 (헤더) ----------
   카트슬롯: '카트 슬롯',
@@ -83,6 +95,46 @@ var COL = {
   라인상태: '라인상태',
   처리일시: '처리일시'
 };
+
+/** 주문(완료)의 앞 25개 고정 열. CSV에서 관찰된 추가 열은 이 목록 뒤에만 붙는다. */
+var ORDER_FIXED_HEADERS = [
+  COL.쇼핑몰, COL.쇼핑몰번호, COL.주문번호, COL.품목별주문번호,
+  COL.배송메시지, COL.총주문금액, COL.총결제금액, COL.상품품목코드,
+  COL.주문상품명, COL.상품옵션기본, COL.수량, COL.판매가,
+  COL.수령인, COL.수령인휴대전화, COL.수령인우편번호, COL.수령인주소전체,
+  COL.출고완료, COL.피킹지시번호, COL.주문상태, COL.취소사유,
+  COL.취소일시, COL.취소경로, COL.확정일시, COL.대기사유, COL.운영메모
+];
+
+/** CSV/레거시 주문 열을 중복 의미 열 없이 고정 열로 흡수하기 위한 별칭. */
+var ORDER_FIXED_HEADER_ALIASES = {};
+ORDER_FIXED_HEADER_ALIASES[COL.품목별주문번호] = ['품목별주문번호', '주문상세번호'];
+ORDER_FIXED_HEADER_ALIASES[COL.상품품목코드] = ['품목코드', '상품코드', 'SKU'];
+ORDER_FIXED_HEADER_ALIASES[COL.주문상품명] = ['상품명'];
+ORDER_FIXED_HEADER_ALIASES[COL.상품옵션기본] = ['옵션명', '옵션'];
+ORDER_FIXED_HEADER_ALIASES[COL.수량] = ['주문수량'];
+ORDER_FIXED_HEADER_ALIASES[COL.수령인주소전체] = ['수령인 주소', '수령인주소'];
+
+/** 이전 버전에서 고정 생성했지만 이제 실제 값이 있을 때만 동적으로 보존하는 열. */
+var ORDER_LEGACY_OPTIONAL_HEADERS = [
+  '주문일시', '주문경로', '결제수단', '상품번호', '상품구매금액', '할인금액',
+  '실결제금액', '주문자명', '주문자 이메일', '주문자 휴대전화', '수령인 일반전화',
+  '배송업체', '송장번호', '배송비', '배송유형'
+];
+
+function canonicalOrderHeader_(header) {
+  var key = normKey_(header);
+  if (!key) return '';
+  for (var i = 0; i < ORDER_FIXED_HEADERS.length; i++) {
+    var canonical = ORDER_FIXED_HEADERS[i];
+    if (normKey_(canonical) === key) return canonical;
+    var aliases = ORDER_FIXED_HEADER_ALIASES[canonical] || [];
+    for (var j = 0; j < aliases.length; j++) {
+      if (normKey_(aliases[j]) === key) return canonical;
+    }
+  }
+  return '';
+}
 
 var ENUM = {
   헤더상태: { 대기: '대기', 완료: '완료', 취소: '취소', 출력오류: '출력오류' },

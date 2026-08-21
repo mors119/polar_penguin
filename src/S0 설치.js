@@ -33,11 +33,10 @@ function 설치_2_시트정비(silent) {
 
   /* ---------- 주문 (완료) ---------- */
   var 주문 = readTable_(ROLE.주문);
-  var 추가주문 = ensureColumns_(주문.sheet, 주문.headers, [
-    COL.피킹지시번호, COL.주문상태, COL.취소사유, COL.취소일시, COL.취소경로,
-    COL.확정일시, COL.대기사유, '운영메모'
-  ]);
-  결과.push('주문(완료): ' + (추가주문.length ? '열 추가 ' + 추가주문.join(', ') : '변경 없음'));
+  var 주문이전 = migrateOrderSheetSchema_(주문);
+  결과.push('주문(완료): ' + (주문이전.changed
+    ? '고정 25열 정렬 / 동적 ' + 주문이전.dynamicHeaders.length + '열 보존'
+    : '변경 없음'));
 
   주문 = readTable_(ROLE.주문);
   var c주문상태 = col_(주문, COL.주문상태, true);
@@ -57,7 +56,8 @@ function 설치_2_시트정비(silent) {
       .requireValueInList([ENUM.주문상태.예약, ENUM.주문상태.출고완료, ENUM.주문상태.취소], true)
       .setAllowInvalid(false).build());
 
-  [COL.주문번호, COL.품목별주문번호, COL.상품품목코드, '수령인 우편번호', '수령인 휴대전화']
+  [COL.쇼핑몰번호, COL.주문번호, COL.품목별주문번호, COL.상품품목코드,
+   COL.수령인우편번호, COL.수령인휴대전화]
     .forEach(function (name) {
       var idx = col_(주문, name, false);
       if (idx >= 0) 주문.sheet.getRange(1, idx + 1, 주문.sheet.getMaxRows(), 1).setNumberFormat('@');
@@ -168,7 +168,7 @@ function 설치_2_시트정비(silent) {
       주문.sheet.getRange(1, idx + 1).setNote('시스템 관리 필드입니다. 메뉴와 자동 처리 결과로만 변경하세요.');
       주문.sheet.getRange(2, idx + 1, Math.max(주문.sheet.getMaxRows() - 1, 1), 1).setBackground('F2F2F2');
     });
-  var c메모 = col_(주문, '운영메모', false);
+  var c메모 = col_(주문, COL.운영메모, false);
   if (c메모 >= 0) 주문.sheet.getRange(2, c메모 + 1, Math.max(주문.sheet.getMaxRows() - 1, 1), 1).setBackground('FFF9E6');
 
   var msg = '시트 정비 완료\n\n' + 결과.join('\n') +
@@ -303,6 +303,85 @@ function ensureColumns_(sheet, headers, names) {
   }
   sheet.getRange(1, start, 1, 추가.length).setValues([추가]).setFontWeight('bold');
   return 추가;
+}
+
+/**
+ * 주문 시트를 고정 25열 + 실제 동적 열 구조로 재구성할 값을 계산한다.
+ * 고정 열은 이름으로 찾아 순서를 바로잡고, 레거시 상품명/옵션명/주소는 정식 열이
+ * 비어 있을 때만 보충한다. 이전 버전의 선택 열은 값이 있는 경우에만 동적으로 남긴다.
+ */
+function buildOrderSchemaMigration_(headers, rows) {
+  headers = (headers || []).map(function (header) { return toStr_(header); });
+  rows = rows || [];
+  var sourceByKey = {};
+  headers.forEach(function (header, index) {
+    var key = normKey_(header);
+    if (!key) return;
+    if (!sourceByKey[key]) sourceByKey[key] = [];
+    sourceByKey[key].push(index);
+  });
+
+  function sourceIndexes(canonical) {
+    var names = [canonical].concat(ORDER_FIXED_HEADER_ALIASES[canonical] || []), indexes = [];
+    names.forEach(function (name) {
+      (sourceByKey[normKey_(name)] || []).forEach(function (index) {
+        if (indexes.indexOf(index) < 0) indexes.push(index);
+      });
+    });
+    return indexes;
+  }
+
+  var legacyOptional = {};
+  ORDER_LEGACY_OPTIONAL_HEADERS.forEach(function (header) { legacyOptional[normKey_(header)] = true; });
+  var dynamic = [], dynamicKeys = {}, removed = [];
+  headers.forEach(function (header, index) {
+    var key = normKey_(header);
+    if (!key) return;
+    if (canonicalOrderHeader_(header)) { if (ORDER_FIXED_HEADERS.indexOf(header) < 0) removed.push(header); return; }
+    if (dynamicKeys[key]) { removed.push(header); return; }
+    var hasValue = rows.some(function (row) { return !isBlank_(row[index]); });
+    if (legacyOptional[key] && !hasValue) { removed.push(header); return; }
+    dynamicKeys[key] = true;
+    dynamic.push({ header: header, index: index });
+  });
+
+  var fixedSources = ORDER_FIXED_HEADERS.map(sourceIndexes);
+  var migratedRows = rows.map(function (row) {
+    var fixed = fixedSources.map(function (indexes) {
+      for (var i = 0; i < indexes.length; i++) {
+        if (!isBlank_(row[indexes[i]])) return row[indexes[i]];
+      }
+      return indexes.length ? row[indexes[0]] : '';
+    });
+    return fixed.concat(dynamic.map(function (column) { return row[column.index]; }));
+  });
+  var targetHeaders = ORDER_FIXED_HEADERS.concat(dynamic.map(function (column) { return column.header; }));
+  var changed = headers.length !== targetHeaders.length || headers.some(function (header, index) {
+    return header !== targetHeaders[index];
+  });
+  if (!changed) {
+    changed = migratedRows.some(function (row, rowIndex) {
+      return row.some(function (value, columnIndex) { return value !== rows[rowIndex][columnIndex]; });
+    });
+  }
+  return { headers: targetHeaders, rows: migratedRows, dynamicHeaders: dynamic.map(function (column) {
+    return column.header;
+  }), removedHeaders: removed, changed: changed };
+}
+
+/** 기존 행을 지우지 않고 메모리에 보존한 뒤 표준 주문 스키마로 한 번에 다시 쓴다. */
+function migrateOrderSheetSchema_(table) {
+  var migrated = buildOrderSchemaMigration_(table.headers, table.rows);
+  if (!migrated.changed) return migrated;
+  var sheet = table.sheet, width = migrated.headers.length;
+  if (sheet.getMaxColumns() < width) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), width - sheet.getMaxColumns());
+  }
+  sheet.clearContents();
+  var values = [migrated.headers].concat(migrated.rows);
+  sheet.getRange(1, 1, values.length, width).setValues(values);
+  sheet.getRange(1, 1, 1, width).setFontWeight('bold').setBackground('E8EDF3');
+  return migrated;
 }
 
 /**

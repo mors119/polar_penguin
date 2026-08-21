@@ -2,7 +2,7 @@
  * S8. 예약 주문 피킹 관리.
  *
  * 예약 주문은 고객이 아니라 주문번호가 처리 단위다. 화면은 대기 주문에 등장한 SKU를 선택하며,
- * 서버가 주문일시 FIFO와 주문 전체 재고를 계산한다. 미리보기는 읽기 전용이고 실제
+ * 서버가 사용 가능한 주문일시(없으면 주문번호/품목번호 fallback)와 주문 전체 재고를 계산한다. 미리보기는 읽기 전용이고 실제
  * 생성 시에는 lock 안에서 주문/재고를 다시 읽어 같은 계산을 수행한다.
  */
 
@@ -146,8 +146,8 @@ function readReservationSnapshot_() {
     sku: col_(orderTable, COL.상품품목코드, true), qty: col_(orderTable, COL.수량, true),
     state: col_(orderTable, COL.주문상태, true), instruction: col_(orderTable, COL.피킹지시번호, true),
     date: reservationOptionalColumn_(orderTable, ['주문일시', '주문일자', '주문일', '결제일시']),
-    recipientName: reservationOptionalColumn_(orderTable, ['수령인', '수령인명', '수령인 이름']),
-    recipientMobile: reservationOptionalColumn_(orderTable, ['수령인 휴대전화', '수령인휴대전화'])
+    recipientName: col_(orderTable, COL.수령인, true),
+    recipientMobile: col_(orderTable, COL.수령인휴대전화, true)
   };
   var grouped = {};
   orderTable.rows.forEach(function (row) {
