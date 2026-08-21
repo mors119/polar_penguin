@@ -21,7 +21,7 @@ function createContext(tables = {}) {
     품목별주문번호: '품목별 주문번호', 보관위치: '보관위치', 상품코드: '상품코드',
     상품명: '상품명', 옵션: '옵션', 필요수량: '필요수량', 라인상태: '라인상태',
     수령인: '수령인', 수령인휴대전화: '수령인 휴대전화', 수령인우편번호: '수령인 우편번호',
-    수령인주소전체: '수령인 주소(전체)', 배송메시지: '배송메시지'
+    수령인주소전체: '수령인 주소(전체)', 배송메시지: '배송메시지', 확정일시: '확정일시'
   };
   context.ENUM = { 헤더상태: { 대기: '대기', 완료: '완료', 취소: '취소', 출력오류: '출력오류' }, 라인상태: { 취소: '취소' } };
   context.normKey_ = value => String(value == null ? '' : value).replace(/\s/g, '').toLowerCase();
@@ -34,7 +34,11 @@ function createContext(tables = {}) {
   context.toNum_ = value => Number(value) || 0;
   context.isBlank_ = value => value == null || String(value).trim() === '';
   context.readTable_ = role => tables[role];
-  context.Utilities = { formatDate: (_date, _tz, format) => format === 'yyyy-MM-dd' ? '2026-08-19' : '2026-08-19 10:00' };
+  context.Utilities = { formatDate: (_date, _tz, format) => {
+    if (format === 'yyyy-MM-dd') return '2026-08-19';
+    if (format === 'MM/dd HH:mm') return '08/21 10:30';
+    return '2026-08-19 10:00';
+  } };
   context.tz_ = () => 'Asia/Seoul';
   context.withLock_ = fn => fn();
   context.writeOpLog_ = () => {};
@@ -48,14 +52,16 @@ function documentTables(orderSpecs, instructionNo = 'PK-1') {
     headerRows.push([instructionNo, order.orderNo, '대기', '']);
     order.items.forEach((item, itemIndex) => {
       const itemNo = `${order.orderNo}-I${itemIndex + 1}`;
-      orderRows.push([order.orderNo, itemNo, order.orderDate || `2026-08-${String(orderIndex + 1).padStart(2, '0')} 09:00`,
+      orderRows.push([order.orderNo, itemNo, order.orderDate || '', order.confirmedAt === undefined ?
+        `2026-08-${String(orderIndex + 1).padStart(2, '0')} 09:00` : order.confirmedAt,
         order.recipient || '', order.phone || '', order.postal || '', order.address || '', order.message || '']);
-      lineRows.push([instructionNo, order.orderNo, itemNo, item.sku, item.location || '', item.name, item.option || '', item.quantity, '미처리']);
+      lineRows.push([instructionNo, order.orderNo, itemNo, item.sku, item.location || '', item.name, item.option || '', item.quantity,
+        item.state || '미처리']);
     });
   });
   return {
     header: table(['피킹지시번호', '주문번호', '상태', '출력일시'], headerRows),
-    orders: table(['주문번호', '품목별 주문번호', '주문일시', '수령인', '수령인 휴대전화', '수령인 우편번호', '수령인 주소(전체)', '배송메시지'], orderRows),
+    orders: table(['주문번호', '품목별 주문번호', '주문일시', '확정일시', '수령인', '수령인 휴대전화', '수령인 우편번호', '수령인 주소(전체)', '배송메시지'], orderRows),
     lines: table(['피킹지시번호', '주문번호', '품목별 주문번호', '상품코드', '보관위치', '상품명', '옵션', '필요수량', '라인상태'], lineRows)
   };
 }
@@ -93,7 +99,7 @@ test('all order items aggregate by SKU while different option SKUs stay separate
 });
 
 test('packing data preserves customer match fields without exposing a full phone number', () => {
-  const context = createContext(documentTables([{ orderNo: 'A001', orderDate: '2026-08-01 08:30',
+  const context = createContext(documentTables([{ orderNo: 'A001', confirmedAt: '2026-08-01 08:30',
     recipient: '김희성', phone: '010-9876-1234', postal: '01234', address: '서울시 중구', message: '문 앞',
     items: [{ sku: 'BOOK', location: 'A-01', name: '만화책', quantity: 2 }] }]));
   const order = context.buildPickingDocumentData_('PK-1').orders[0];
@@ -101,8 +107,69 @@ test('packing data preserves customer match fields without exposing a full phone
   assert.equal(order.recipient, '김희성');
   assert.equal(order.phoneLast4, '1234');
   assert.equal(order.postalCode, '01234');
+  assert.equal(order.confirmedAt, '2026-08-01 08:30');
+  assert.equal(order.orderDateText, '08/01 08:30');
   assert.equal(order.items[0].quantity, 2);
   assert.equal(JSON.stringify(order).includes('010-9876-1234'), false);
+});
+
+test('포장표 주문일시는 레거시 주문일시 없이 확정일시를 사용한다', () => {
+  const tables = documentTables([{ orderNo: 'A001', orderDate: '1999-01-01 00:00', confirmedAt: '2026-08-21 19:42',
+    items: [{ sku: 'BOOK', location: 'A-01', name: '만화책', quantity: 1 }] }]);
+  tables.orders.headers.splice(2, 1);
+  tables.orders.rows.forEach(row => row.splice(2, 1));
+  const data = createContext(tables).buildPickingDocumentData_('PK-1');
+  assert.equal(data.orders[0].confirmedAt, '2026-08-21 19:42');
+  assert.equal(data.orders[0].orderDateText, '08/21 19:42');
+});
+
+test('포장표의 Date 확정일시는 MM/dd HH:mm으로 형식화하고 빈 값은 하이픈이다', () => {
+  const context = createContext();
+  const date = vm.runInContext("new Date('2026-08-21T10:30:00+09:00')", context);
+  assert.equal(context.S9_formatPackingDateTime_(date), '08/21 10:30');
+  assert.equal(context.S9_formatPackingDateTime_(''), '-');
+  assert.equal(context.S9_formatPackingDateTime_('not-a-date'), '-');
+});
+
+test('포장표는 주문 첫 행만 order-start로 표시하고 공백 구분 행을 추가하지 않는다', () => {
+  const context = createContext(documentTables([
+    { orderNo: 'A', confirmedAt: '2026-08-21 10:30', items: [
+      { sku: 'A1', location: 'A-01', name: '상품 A1', quantity: 1 },
+      { sku: 'A2', location: 'A-02', name: '상품 A2', quantity: 1 }
+    ] },
+    { orderNo: 'B', confirmedAt: '2026-08-21 11:15', items: [
+      { sku: 'B1', location: 'B-01', name: '상품 B1', quantity: 1 },
+      { sku: 'B2', location: 'B-02', name: '상품 B2', quantity: 1 }
+    ] }
+  ]));
+  const html = context.renderPickingDocumentHTML_(context.buildPickingDocumentData_('PK-1'));
+  const packingBody = html.split('<table class="packing">')[1];
+  assert.equal((packingBody.match(/<tr class="order-start/g) || []).length, 2);
+  assert.equal((packingBody.match(/<tr class="">/g) || []).length, 2);
+  assert.match(packingBody, /order-start first-order/);
+  assert.match(html, /order-start:not\(\.first-order\) td\{border-top:2px solid #333\}/);
+  assert.doesNotMatch(packingBody, /<tr[^>]*>\s*<\/tr>/);
+});
+
+test('확정일시로 바꿔 표시해도 기존 주문 정렬은 변하지 않는다', () => {
+  const context = createContext(documentTables([
+    { orderNo: 'B', orderDate: '2026-08-01 09:00', confirmedAt: '2026-08-21 11:15',
+      items: [{ sku: 'B1', location: 'B-01', name: '상품 B', quantity: 1 }] },
+    { orderNo: 'A', orderDate: '2026-08-02 09:00', confirmedAt: '2026-08-21 10:30',
+      items: [{ sku: 'A1', location: 'A-01', name: '상품 A', quantity: 1 }] }
+  ]));
+  const orders = context.buildPickingDocumentData_('PK-1').orders;
+  assert.deepEqual(Array.from(orders, order => order.orderNo), ['B', 'A']);
+});
+
+test('취소된 피킹 라인은 기존처럼 포장표에서 제외된다', () => {
+  const context = createContext(documentTables([{ orderNo: 'A001', items: [
+    { sku: 'KEEP', location: 'A-01', name: '정상 상품', quantity: 1 },
+    { sku: 'CANCEL', location: 'A-02', name: '취소 상품', quantity: 1, state: '취소' }
+  ] }]));
+  const data = context.buildPickingDocumentData_('PK-1');
+  assert.equal(data.orders[0].items.length, 1);
+  assert.equal(data.orders[0].items[0].sku, 'KEEP');
 });
 
 test('compact shared HTML has two tables, missing-location warning, and no cart or O/X workflow', () => {

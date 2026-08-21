@@ -65,7 +65,8 @@ function buildPackingOrders_(orderMeta, items) {
     if (!grouped[no]) {
       var meta = orderMeta[no] || {};
       grouped[no] = {
-        orderNo: no, orderDate: meta.orderDate || '', orderDateText: meta.orderDateText || '',
+        orderNo: no, orderDate: meta.orderDate || '', confirmedAt: meta.confirmedAt || '',
+        orderDateText: meta.confirmedAtText || '-',
         recipient: meta.recipient || '', phoneLast4: meta.phoneLast4 || '', postalCode: meta.postalCode || '',
         address: meta.address || '', message: meta.message || '', items: []
       };
@@ -113,6 +114,7 @@ function buildPickingDocumentData_(instructionNo) {
   var O = {
     orderNo: col_(orders, COL.주문번호, true), itemNo: col_(orders, COL.품목별주문번호, true),
     orderDate: S9_optionalColumn_(orders, ['주문일시', '주문일자', '주문일', '결제일시']),
+    confirmedAt: col_(orders, COL.확정일시, true),
     recipient: col_(orders, COL.수령인, true),
     phone: col_(orders, COL.수령인휴대전화, true),
     postal: col_(orders, COL.수령인우편번호, true),
@@ -130,7 +132,7 @@ function buildPickingDocumentData_(instructionNo) {
     var detail = O.detailAddress >= 0 ? toStr_(row[O.detailAddress]) : '';
     orderMeta[no] = {
       orderDate: O.orderDate >= 0 ? row[O.orderDate] : '',
-      orderDateText: O.orderDate >= 0 ? S9_formatDateTime_(row[O.orderDate]) : '',
+      confirmedAt: row[O.confirmedAt], confirmedAtText: S9_formatPackingDateTime_(row[O.confirmedAt]),
       recipient: O.recipient >= 0 ? toStr_(row[O.recipient]) : '',
       phoneLast4: phone ? phone.slice(-4) : '', postalCode: O.postal >= 0 ? toStr_(row[O.postal]) : '',
       address: [address, detail].filter(String).join(' '), message: O.message >= 0 ? toStr_(row[O.message]) : ''
@@ -184,6 +186,8 @@ function renderPickingDocumentHTML_(data) {
     'th,td{border:1px solid #9da7b3;padding:2px 3px;vertical-align:top;word-break:break-word}',
     '.num{text-align:right;font-weight:700}.center{text-align:center}.sku{font-family:Consolas,monospace}',
     '.missing{background:#fff1f0;color:#b42318;font-weight:700}.address,.message{font-size:7.5pt}',
+    '.packing tbody tr.order-start:not(.first-order) td{border-top:2px solid #333}',
+    '.packing tbody tr.order-start .order-no{font-weight:700}',
     'tr{page-break-inside:avoid}</style></head><body>',
     '<h1>', e(data.title), ' &nbsp; ', e(data.instructionNo), '</h1>',
     '<div class="meta">', e(data.createdAt), ' &nbsp;·&nbsp; 주문 ', data.summary.orderCount,
@@ -200,16 +204,18 @@ function renderPickingDocumentHTML_(data) {
       '</td><td class="sku">', e(item.sku), '</td><td>', e(item.productName), '</td><td>', e(item.option || '-'),
       '</td><td class="center">', item.orderCount, '</td><td class="num">', item.quantity, '</td></tr>');
   });
-  parts.push('</tbody></table><h2>주문별 포장 / 송장 확인</h2><table><thead><tr>',
+  parts.push('</tbody></table><h2>주문별 포장 / 송장 확인</h2><table class="packing"><thead><tr>',
     '<th style="width:10%">주문일시</th><th style="width:12%">주문번호</th><th style="width:8%">수령인</th>',
     '<th style="width:6%">전화 끝4</th><th style="width:7%">우편번호</th><th>상품명</th>',
     '<th style="width:11%">옵션</th><th style="width:5%">수량</th>');
   if (data.hasAddress) parts.push('<th style="width:18%">배송주소</th>');
   if (data.hasMessage) parts.push('<th style="width:14%">배송메시지</th>');
   parts.push('</tr></thead><tbody>');
-  data.orders.forEach(function (order) {
-    order.items.forEach(function (item) {
-      parts.push('<tr><td>', e(order.orderDateText), '</td><td>', e(order.orderNo), '</td><td>', e(order.recipient),
+  data.orders.forEach(function (order, orderIndex) {
+    order.items.forEach(function (item, itemIndex) {
+      var isOrderStart = itemIndex === 0;
+      parts.push('<tr class="', isOrderStart ? 'order-start' + (orderIndex === 0 ? ' first-order' : '') : '',
+        '"><td>', e(order.orderDateText), '</td><td class="order-no">', e(order.orderNo), '</td><td>', e(order.recipient),
         '</td><td class="center">', e(order.phoneLast4), '</td><td>', e(order.postalCode), '</td><td>', e(item.productName),
         '</td><td>', e(item.option || '-'), '</td><td class="num">', item.quantity, '</td>');
       if (data.hasAddress) parts.push('<td class="address">', e(order.address), '</td>');
@@ -345,6 +351,18 @@ function S9_sortDate_(value) {
 function S9_formatDateTime_(value) {
   if (value instanceof Date) return Utilities.formatDate(value, tz_(), 'yyyy-MM-dd HH:mm');
   return toStr_(value);
+}
+
+/** 포장표의 주문일시는 주문(완료).확정일시를 짧고 일관된 형식으로 표시한다. */
+function S9_formatPackingDateTime_(value) {
+  if (isBlank_(value)) return '-';
+  if (value instanceof Date) return Utilities.formatDate(value, tz_(), 'MM/dd HH:mm');
+  var text = toStr_(value);
+  var matched = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})[ T](\d{1,2}):(\d{2})/);
+  if (matched) return ('0' + matched[2]).slice(-2) + '/' + ('0' + matched[3]).slice(-2) + ' ' +
+    ('0' + matched[4]).slice(-2) + ':' + matched[5];
+  var parsed = new Date(text);
+  return isNaN(parsed.getTime()) ? '-' : Utilities.formatDate(parsed, tz_(), 'MM/dd HH:mm');
 }
 
 function S9_escapeHtml_(value) {
