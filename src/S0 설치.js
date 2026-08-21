@@ -414,7 +414,7 @@ function onOpen(e) {
         .addItem('Input 지금 처리', 'processInput'))
       .addSubMenu(ui.createMenu('📋 주문')
         .addItem('선택 주문 취소', '선택_주문취소')
-        .addItem('예약 주문 피킹 관리', '예약_주문피킹관리'))
+        .addItem('예약상품 입고 관리', '예약상품_입고관리'))
       .addSubMenu(ui.createMenu('📄 피킹지시서')
         .addItem('피킹지시서 조회 / 재출력', 'S9_1_작업지시서출력'))
       .addSubMenu(ui.createMenu('📍 위치 관리')
