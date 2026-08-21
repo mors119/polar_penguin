@@ -270,44 +270,44 @@ function executeCancellationScope_(payload) {
   if (scope !== 'SINGLE' && scope !== 'RECIPIENT') throw new Error('올바른 취소 범위를 선택하세요.');
   if (CANCELLATION_REASONS.indexOf(reason) < 0) throw new Error('올바른 취소 사유를 선택하세요.');
 
-  return withLock_(function () {
-    var context = cancellationContextFromTable_(readTable_(ROLE.주문), selectedOrderNo);
-    if (scope === 'RECIPIENT' && !context.phoneAvailable) {
-      throw new Error('수령인 휴대전화가 없어 동일 수령인 주문 전체 취소를 실행할 수 없습니다.');
-    }
-    var targets = scope === 'SINGLE'
-      ? [selectedOrderNo]
-      : context.relatedOrders.map(function (order) { return order.orderNo; });
-    if (!targets.length) targets = [selectedOrderNo];
-    var selectedSummary = scope === 'SINGLE' ? context.singleSummary : context.bulkSummary;
-    if (selectedSummary.completedOrderCount > 0 && payload.confirmCompleted !== true) {
-      throw new Error('출고완료 주문 ' + selectedSummary.completedOrderCount + '건의 재고 복원 확인이 필요합니다. 취소 대상을 다시 확인하세요.');
-    }
-    var source = scope === 'SINGLE' ? 'MENU_SINGLE_CANCEL' : 'MENU_RECIPIENT_BULK_CANCEL';
-    var summary = { requested: targets.length, success: 0, alreadyCancelled: 0, failed: [], restoredQuantity: 0 };
-    targets.forEach(function (orderNo) {
-      try {
-        var result = cancelOrder_(orderNo, reason, source, {
-          confirmReturn: payload.confirmCompleted === true, refresh: false
-        });
-        if (result.취소) {
-          summary.success++;
-          summary.restoredQuantity += toNum_(result.복원수량);
-        } else if (result.이미취소) {
-          summary.alreadyCancelled++;
-        } else {
-          summary.failed.push({ orderNo: orderNo, reason: result.메시지 || '취소되지 않았습니다.' });
-        }
-      } catch (e) {
-        summary.failed.push({ orderNo: orderNo, reason: e.message || String(e) });
+  // cancelOrder_() owns the mutation lock. Holding another scope-level lock here
+  // would require nested ScriptLock acquisition for every target.
+  var context = cancellationContextFromTable_(readTable_(ROLE.주문), selectedOrderNo);
+  if (scope === 'RECIPIENT' && !context.phoneAvailable) {
+    throw new Error('수령인 휴대전화가 없어 동일 수령인 주문 전체 취소를 실행할 수 없습니다.');
+  }
+  var targets = scope === 'SINGLE'
+    ? [selectedOrderNo]
+    : context.relatedOrders.map(function (order) { return order.orderNo; });
+  if (!targets.length) targets = [selectedOrderNo];
+  var selectedSummary = scope === 'SINGLE' ? context.singleSummary : context.bulkSummary;
+  if (selectedSummary.completedOrderCount > 0 && payload.confirmCompleted !== true) {
+    throw new Error('출고완료 주문 ' + selectedSummary.completedOrderCount + '건의 재고 복원 확인이 필요합니다. 취소 대상을 다시 확인하세요.');
+  }
+  var source = scope === 'SINGLE' ? 'MENU_SINGLE_CANCEL' : 'MENU_RECIPIENT_BULK_CANCEL';
+  var summary = { requested: targets.length, success: 0, alreadyCancelled: 0, failed: [], restoredQuantity: 0 };
+  targets.forEach(function (orderNo) {
+    try {
+      var result = cancelOrder_(orderNo, reason, source, {
+        confirmReturn: payload.confirmCompleted === true, refresh: false
+      });
+      if (result.취소) {
+        summary.success++;
+        summary.restoredQuantity += toNum_(result.복원수량);
+      } else if (result.이미취소) {
+        summary.alreadyCancelled++;
+      } else {
+        summary.failed.push({ orderNo: orderNo, reason: result.메시지 || '취소되지 않았습니다.' });
       }
-    });
-    try { D0_대시보드전체갱신(true); } catch (ignore) { }
-    writeOpLog_('executeCancellationScope_', summary.failed.length ? '부분실패' : '성공',
-      '선택주문=' + selectedOrderNo + ' / 범위=' + scope + ' / 대상=' + summary.requested +
-      ' / 성공=' + summary.success + ' / 실패=' + summary.failed.length + ' / 사유=' + reason);
-    return summary;
+    } catch (e) {
+      summary.failed.push({ orderNo: orderNo, reason: e.message || String(e) });
+    }
   });
+  try { D0_대시보드전체갱신(true); } catch (ignore) { }
+  writeOpLog_('executeCancellationScope_', summary.failed.length ? '부분실패' : '성공',
+    '선택주문=' + selectedOrderNo + ' / 범위=' + scope + ' / 대상=' + summary.requested +
+    ' / 성공=' + summary.success + ' / 실패=' + summary.failed.length + ' / 사유=' + reason);
+  return summary;
 }
 
 /** HtmlService에서 호출하는 공개 RPC. */

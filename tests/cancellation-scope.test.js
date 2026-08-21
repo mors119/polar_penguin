@@ -11,6 +11,16 @@ for (const file of ['S0 공통.js', 'S7 주문취소.js']) {
 }
 const centralCancelOrder = context.cancelOrder_;
 
+test('cancellation modal submits the SINGLE payload and exposes server failures', () => {
+  const html = fs.readFileSync(path.join(root, 'src', 'CancellationScope.html'), 'utf8');
+  assert.match(html, /name="scope" value="SINGLE" checked/);
+  assert.match(html, /return checked\?checked\.value:'SINGLE'/);
+  assert.match(html, /\.withFailureHandler\(fail\)\.executeCancellationScope\(\{selectedOrderNo,scope,reason:/);
+  assert.match(html, /confirmCompleted:completed/);
+  assert.match(html, /btn\.disabled=false/);
+  assert.match(html, /e&&e\.message\?e\.message:e/);
+});
+
 function table(role, headers, rows) {
   const result = {
     role, headers, rows, width: headers.length,
@@ -96,6 +106,104 @@ test('single related order keeps scope simple', () => {
   const result = context.getCancellationContext_('A001');
   assert.equal(result.bulkAvailable, false);
   assert.equal(result.bulkSummary.orderCount, 1);
+});
+
+test('SINGLE public RPC cancels exactly one multi-line order through a non-reentrant mutation lock', () => {
+  const orders = table(context.ROLE.주문, orderHeaders, [
+    orderRow('A001', 'A001-1', 'SKU-A', '상품 A', 2, '예약', '홍길동', '010-1111-2222'),
+    orderRow('A001', 'A001-2', 'SKU-B', '상품 B', 3, '예약', '홍길동', '010-1111-2222'),
+    orderRow('A002', 'A002-1', 'SKU-C', '상품 C', 4, '예약', '홍길동', '01011112222'),
+    orderRow('B001', 'B001-1', 'SKU-D', '상품 D', 6, '예약', '홍길동', '010-9999-8888')
+  ]);
+  const master = table(context.ROLE.마스터, ['상품품목코드', '가용재고'], [
+    ['SKU-A', 10], ['SKU-B', 20], ['SKU-C', 30], ['SKU-D', 40]
+  ]);
+  const headers = table(context.ROLE.헤더, ['피킹지시번호', '주문번호', '상태'], []);
+  const lines = table(context.ROLE.라인,
+    ['주문번호', '품목별 주문번호', '실제수량', '라인상태', '처리일시'], []);
+  install({
+    [context.ROLE.주문]: orders, [context.ROLE.마스터]: master,
+    [context.ROLE.헤더]: headers, [context.ROLE.라인]: lines
+  });
+  context.cancelOrder_ = centralCancelOrder;
+  let lockHeld = false;
+  let lockCalls = 0;
+  context.withLock_ = fn => {
+    assert.equal(lockHeld, false, 'cancellation orchestration must not reacquire the mutation lock');
+    lockHeld = true;
+    lockCalls++;
+    try { return fn(); } finally { lockHeld = false; }
+  };
+  let refreshes = 0;
+  context.D0_대시보드전체갱신 = () => { refreshes++; };
+
+  const payload = {
+    selectedOrderNo: 'A001', scope: 'SINGLE', reason: '고객 요청', confirmCompleted: false
+  };
+  const first = context.executeCancellationScope(payload);
+  assert.deepEqual(JSON.parse(JSON.stringify(first)), {
+    requested: 1, success: 1, alreadyCancelled: 0, failed: [], restoredQuantity: 5
+  });
+  assert.deepEqual(orders.rows.map(row => row[6]), ['취소', '취소', '예약', '예약']);
+  assert.deepEqual(master.rows.map(row => row[1]), [12, 23, 30, 40]);
+  assert.equal(lockCalls, 1);
+  assert.equal(refreshes, 1);
+
+  const second = context.executeCancellationScope_(payload);
+  assert.equal(second.requested, 1);
+  assert.equal(second.success, 0);
+  assert.equal(second.alreadyCancelled, 1);
+  assert.equal(second.failed.length, 0);
+  assert.deepEqual(master.rows.map(row => row[1]), [12, 23, 30, 40]);
+  assert.equal(lockCalls, 2);
+  assert.equal(refreshes, 2);
+});
+
+test('SINGLE cancellation does not depend on recipient phone or bulk availability', () => {
+  const orders = table(context.ROLE.주문, orderHeaders, [
+    orderRow('A001', 'A001-1', 'SKU-A', '상품 A', 2, '예약', '홍길동', ''),
+    orderRow('A002', 'A002-1', 'SKU-B', '상품 B', 3, '예약', '홍길동', '')
+  ]);
+  install({ [context.ROLE.주문]: orders });
+  context.D0_대시보드전체갱신 = () => {};
+  const calls = [];
+  context.cancelOrder_ = orderNo => {
+    calls.push(orderNo);
+    return { 취소: true, 복원수량: 0 };
+  };
+
+  const result = context.executeCancellationScope_({
+    selectedOrderNo: 'A001', scope: 'SINGLE', reason: '고객 요청', confirmCompleted: false
+  });
+  assert.deepEqual(calls, ['A001']);
+  assert.equal(result.requested, 1);
+  assert.equal(result.success, 1);
+  assert.equal(result.failed.length, 0);
+  context.cancelOrder_ = centralCancelOrder;
+});
+
+test('completed SINGLE translates confirmCompleted to cancelOrder confirmation semantics', () => {
+  const orders = table(context.ROLE.주문, orderHeaders, [
+    orderRow('A001', 'A001-1', 'SKU-A', '상품 A', 2, '출고완료', '홍길동', '010-1111-2222')
+  ]);
+  install({ [context.ROLE.주문]: orders });
+  const calls = [];
+  context.cancelOrder_ = (orderNo, reason, source, options) => {
+    calls.push({ orderNo, reason, source, options });
+    return { 취소: true, 복원수량: 2 };
+  };
+  assert.throws(() => context.executeCancellationScope_({
+    selectedOrderNo: 'A001', scope: 'SINGLE', reason: '고객 요청', confirmCompleted: false
+  }), /재고 복원 확인이 필요/);
+  assert.equal(calls.length, 0);
+
+  const result = context.executeCancellationScope_({
+    selectedOrderNo: 'A001', scope: 'SINGLE', reason: '고객 요청', confirmCompleted: true
+  });
+  assert.equal(result.success, 1);
+  assert.equal(calls[0].options.confirmReturn, true);
+  assert.equal(calls[0].options.refresh, false);
+  context.cancelOrder_ = centralCancelOrder;
 });
 
 test('bulk execution re-derives targets, ignores a browser order list, and reports partial results', () => {
