@@ -95,13 +95,45 @@ function D0_대시보드전체갱신(silent) {
 
 function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
   var sh = ensureDashSheet_(ss, '📊 대시보드');
-  try { sh.getDataRange().breakApart(); } catch (ignore) { }
-  sh.clear(); sh.clearFormats();
-  if (sh.getMaxColumns() < 12) sh.insertColumnsAfter(sh.getMaxColumns(), 12 - sh.getMaxColumns());
-  sh.getRange(1, 1, 1, 12).merge().setValue('📊  Polar Penguin 통합 대시보드')
+  dashboardResetSheet_(sh);
+  try {
+    return dashboardRenderLayout_(sh, order, stock, picking, operation);
+  } catch (e) {
+    throw new Error('[렌더링] ' + e.message);
+  }
+}
+
+/** 기존 부분 렌더링을 포함해 시트 전체의 병합과 표시 상태를 초기화한다. */
+function dashboardResetSheet_(sheet) {
+  try {
+    if (sheet.getMaxRows() < 30) sheet.insertRowsAfter(sheet.getMaxRows(), 30 - sheet.getMaxRows());
+    if (sheet.getMaxColumns() < 12) sheet.insertColumnsAfter(sheet.getMaxColumns(), 12 - sheet.getMaxColumns());
+  } catch (e) {
+    throw new Error('[시트 크기 확보] ' + e.message);
+  }
+  try {
+    sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns()).breakApart();
+  } catch (e2) {
+    throw new Error('[병합 초기화] ' + e2.message);
+  }
+  try {
+    sheet.clearContents();
+    sheet.clearFormats();
+  } catch (e3) {
+    throw new Error('[시트 초기화] ' + e3.message);
+  }
+}
+
+/** 대시보드 병합은 이 함수에서만 수행해 범위를 일관되게 관리한다. */
+function dashboardMerge_(sheet, row, column, numRows, numColumns) {
+  return sheet.getRange(row, column, numRows, numColumns).merge();
+}
+
+function dashboardRenderLayout_(sh, order, stock, picking, operation) {
+  dashboardMerge_(sh, 1, 1, 1, 12).setValue('📊  Polar Penguin 통합 대시보드')
     .setFontSize(18).setFontWeight('bold').setFontColor('FFFFFF').setBackground(DASHCOLOR.제목)
     .setVerticalAlignment('middle');
-  sh.getRange(2, 1, 1, 12).merge().setValue('최근 갱신 ' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss') +
+  dashboardMerge_(sh, 2, 1, 1, 12).setValue('최근 갱신 ' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss') +
     '  ·  최근 백업 ' + (operation.lastBackup || '백업 없음'));
   var pendingOrders = Math.max(0, Number(order.전체 || 0) - Number(order.출고완료 || 0) - Number(order.취소 || 0));
   var errorCount = Number(picking.kpi.출력오류 || 0) + (operation.recentErrors || []).length;
@@ -133,17 +165,21 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
     ['전체 주문', order.전체], ['취소 주문', order.취소]
   ]);
 
-  sh.getRange(22, 1, 1, 12).merge().setValue('운영 알림').setFontWeight('bold')
+  dashboardMerge_(sh, 22, 1, 1, 12).setValue('운영 알림').setFontWeight('bold')
     .setBackground(DASHCOLOR.제목).setFontColor('FFFFFF');
-  sh.getRange(23, 1, 1, 12).merge().setValue(operation.recentErrors.join(' / ') || '최근 처리 오류 없음').setWrap(true)
+  dashboardMerge_(sh, 23, 1, 1, 12).setValue(operation.recentErrors.join(' / ') || '최근 처리 오류 없음').setWrap(true)
     .setBackground(errorCount ? DASHCOLOR.위험 : DASHCOLOR.좋음);
-  sh.getRange(25, 1, 1, 12).merge().setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / '))
+  dashboardMerge_(sh, 25, 1, 1, 12).setValue('권고: ' + order.권고.제목 + ' — ' + order.권고.내용.join(' / '))
     .setWrap(true).setBackground(order.권고.색);
-  sh.getRange(27, 1, 1, 12).merge().setValue('빠른 작업 · 셀은 버튼이 아닙니다. 상단 📦 Polar Penguin 메뉴에서 실행하세요.')
+  dashboardMerge_(sh, 27, 1, 1, 12).setValue('빠른 작업 · 셀은 버튼이 아닙니다. 상단 📦 Polar Penguin 메뉴에서 실행하세요.')
     .setFontWeight('bold').setBackground(DASHCOLOR.헤더);
-  sh.getRange(28, 1, 1, 12).setValues([['Drive Input', '', '', 'Input 지금 처리', '', '', '예약상품 입고 관리', '', '', '피킹지시서 재출력', '', '']])
-    .setFontWeight('bold').setHorizontalAlignment('center');
-  [1, 4, 7, 10].forEach(function (col) { sh.getRange(28, col, 1, 3).merge(); });
+  [
+    [1, 'Drive Input'], [4, 'Input 지금 처리'],
+    [7, '예약상품 입고 관리'], [10, '피킹지시서 재출력']
+  ].forEach(function (action) {
+    dashboardMerge_(sh, 28, action[0], 1, 3).setValue(action[1])
+      .setFontWeight('bold').setHorizontalAlignment('center').setVerticalAlignment('middle');
+  });
   for (var c = 1; c <= 12; c++) sh.setColumnWidth(c, 78);
   sh.setRowHeight(1, 38); sh.setRowHeight(4, 30); sh.setRowHeight(5, 48);
   [8, 15, 22, 27].forEach(function (row) { sh.setRowHeight(row, 28); });
@@ -152,20 +188,20 @@ function renderIntegratedDashboard_(ss, order, stock, picking, operation) {
 }
 
 function dashboardKpiCard_(sheet, row, column, label, value, color) {
-  sheet.getRange(row, column, 1, 2).merge().setValue(label).setFontWeight('bold')
+  dashboardMerge_(sheet, row, column, 1, 2).setValue(label).setFontWeight('bold')
     .setHorizontalAlignment('center').setVerticalAlignment('middle').setBackground(DASHCOLOR.헤더);
-  sheet.getRange(row + 1, column, 1, 2).merge().setValue(value).setFontSize(19).setFontWeight('bold')
+  dashboardMerge_(sheet, row + 1, column, 1, 2).setValue(value).setFontSize(19).setFontWeight('bold')
     .setHorizontalAlignment('center').setVerticalAlignment('middle').setBackground(color);
 }
 
 function dashboardDetailSection_(sheet, row, column, title, items) {
-  sheet.getRange(row, column, 1, 6).merge().setValue(title).setFontWeight('bold')
+  dashboardMerge_(sheet, row, column, 1, 6).setValue(title).setFontWeight('bold')
     .setFontColor('FFFFFF').setBackground(DASHCOLOR.제목).setVerticalAlignment('middle');
   items.forEach(function (item, index) {
     var itemRow = row + index + 1;
-    sheet.getRange(itemRow, column, 1, 4).merge().setValue(item[0]).setBackground(DASHCOLOR.카드)
+    dashboardMerge_(sheet, itemRow, column, 1, 4).setValue(item[0]).setBackground(DASHCOLOR.카드)
       .setVerticalAlignment('middle');
-    sheet.getRange(itemRow, column + 4, 1, 2).merge().setValue(item[1]).setFontWeight('bold')
+    dashboardMerge_(sheet, itemRow, column + 4, 1, 2).setValue(item[1]).setFontWeight('bold')
       .setHorizontalAlignment(typeof item[1] === 'number' ? 'right' : 'left').setVerticalAlignment('middle');
   });
 }
