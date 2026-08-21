@@ -279,12 +279,15 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
 
   const orderSheet = operationSs.getSheetByName('주문(완료)');
   const orderHeaders = orderSheet.getRange(1, 1, 1, orderSheet.getLastColumn()).getValues()[0];
-  for (const header of ['주문번호', '품목별 주문번호', '상품품목코드', '수령인 휴대전화',
-    '수령인 우편번호', '수령인 주소', '배송메시지', '출고완료', '피킹지시번호', '주문상태',
-    '취소사유', '취소일시', '취소경로', '확정일시', '대기사유', '운영메모']) {
-    assert.ok(orderHeaders.includes(header), `order schema is missing ${header}`);
-  }
-  orderSheet.getRange(2, 1).setValue('ORDER-KEEP');
+  assert.deepEqual(orderHeaders, Array.from(context.ORDER_FIXED_HEADERS),
+    'fresh setup starts with exactly the 25 canonical order columns');
+  const orderNumberColumn = orderHeaders.indexOf('주문번호') + 1;
+  orderSheet.getRange(2, orderNumberColumn).setValue('ORDER-KEEP');
+  const orderLegacyStart = orderSheet.getLastColumn() + 1;
+  orderSheet.getRange(1, orderLegacyStart, 1, 6)
+    .setValues([['상품명', '옵션명', '수령인 주소', '주문일시', '배송업체', '사용자 주문필드']]);
+  orderSheet.getRange(2, orderLegacyStart, 1, 6)
+    .setValues([['상품 A', '빨강', '서울시 중구', '2026-08-01 09:00', '', 'KEEP-ORDER-DYNAMIC']]);
   operationSs.getSheetByName('상품마스터').getRange(2, 1).setValue('SKU-KEEP');
   const masterSheet = operationSs.getSheetByName('상품마스터');
   const firstMasterHeaders = masterSheet.getDataRange().getValues()[0];
@@ -308,7 +311,17 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.equal(configSheet.getDataRange().getValues().some((row) => row[1] === '예약키워드'), false);
   assert.equal(configSheet.getDataRange().getValues().some((row) => row[0] === '별칭' && row[1] === '예약재고'), false);
   assert.equal(properties.has('FOLDER_ID_PROCESSED'), false);
-  assert.equal(orderSheet.getRange(2, 1).getValue(), 'ORDER-KEEP');
+  const migratedOrder = orderSheet.getDataRange().getValues();
+  assert.deepEqual(migratedOrder[0].slice(0, 25), Array.from(context.ORDER_FIXED_HEADERS));
+  assert.equal(migratedOrder[1][migratedOrder[0].indexOf('주문번호')], 'ORDER-KEEP');
+  assert.equal(migratedOrder[1][migratedOrder[0].indexOf('주문상품명(기본)')], '상품 A');
+  assert.equal(migratedOrder[1][migratedOrder[0].indexOf('상품옵션(기본)')], '빨강');
+  assert.equal(migratedOrder[1][migratedOrder[0].indexOf('수령인 주소(전체)')], '서울시 중구');
+  assert.deepEqual(migratedOrder[0].slice(25), ['주문일시', '사용자 주문필드']);
+  assert.equal(migratedOrder[1][migratedOrder[0].indexOf('사용자 주문필드')], 'KEEP-ORDER-DYNAMIC');
+  for (const removed of ['상품명', '옵션명', '수령인 주소', '배송업체']) {
+    assert.equal(migratedOrder[0].includes(removed), false, `${removed} should not remain as an order column`);
+  }
   assert.equal(operationSs.getSheetByName('상품마스터').getRange(2, 1).getValue(), 'SKU-KEEP');
   const migratedMaster = operationSs.getSheetByName('상품마스터').getDataRange().getValues();
   for (const removed of ['이미지', '예약재고', '상품상태', '예약상품', '불량재고']) {
@@ -326,7 +339,10 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   const repaired = context.setupSystem();
   assert.equal(repaired.spreadsheets.filter((item) => item.created).length, 0);
   assert.ok(operationSs.getSheetByName('피킹(헤더)'));
-  assert.equal(operationSs.getSheetByName('주문(완료)').getRange(2, 1).getValue(), 'ORDER-KEEP');
+  const repairedOrder = operationSs.getSheetByName('주문(완료)').getDataRange().getValues();
+  assert.deepEqual(repairedOrder[0].slice(0, 25), Array.from(context.ORDER_FIXED_HEADERS));
+  assert.deepEqual(repairedOrder[0].slice(25), ['주문일시', '사용자 주문필드']);
+  assert.equal(repairedOrder[1][repairedOrder[0].indexOf('주문번호')], 'ORDER-KEEP');
   assert.equal(spreadsheets.size, 1);
   assert.equal(triggers.length, 2);
   assert.equal(dashboardRefreshes, 3);

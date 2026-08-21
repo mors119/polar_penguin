@@ -104,8 +104,9 @@ function installConfirmationTables(orderRows) {
 test('reservation queue candidates come from waiting order rows without product flags', () => {
   const tables = {
     [context.ROLE.주문]: table(context.ROLE.주문,
-      ['주문번호', '품목별 주문번호', '상품품목코드', '수량', '주문상태', '피킹지시번호'],
-      [['WAIT-1', 'ITEM-1', 'BOOK', 2, '예약', '']]),
+      ['주문번호', '품목별 주문번호', '상품품목코드', '수량', '주문상태', '피킹지시번호',
+        '수령인', '수령인 휴대전화'],
+      [['WAIT-1', 'ITEM-1', 'BOOK', 2, '예약', '', '김희성', '01012345678']]),
     [context.ROLE.마스터]: table(context.ROLE.마스터,
       ['상품품목코드', '상품명', '옵션명', '가용재고', '재고관리'],
       [['BOOK', '책', '-', 5, 'T']])

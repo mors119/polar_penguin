@@ -18,11 +18,12 @@
  
 /** 문자열로 보존해야 하는 컬럼 */
 var TEXT_COLUMNS_ORDER = [
+  COL.쇼핑몰번호,
   COL.주문번호,
   COL.품목별주문번호,
   COL.상품품목코드,
-  '수령인 우편번호',
-  '수령인 휴대전화'
+  COL.수령인우편번호,
+  COL.수령인휴대전화
 ];
  
 /**
@@ -38,8 +39,10 @@ function S2_1_주문CSV취입(입력파일, options) {
     options = options || {};
     var csvFiles = [입력파일];
 
-    // 카페24 주문 export의 모든 열을 먼저 보충한다. 내부 운영 열만 남기고
-    // 원본 필드를 버리는 회귀를 막으며, 기존 열과 데이터는 이동하거나 지우지 않는다.
+    // setup을 아직 재실행하지 않은 기존 설치도 첫 취입 전에 같은 안전한 정비를 거친다.
+    migrateOrderSheetSchema_(readTable_(ROLE.주문));
+    // 고정 의미 열은 앞 25열에 흡수하고 실제 파일에만 있는 추가 열은 끝에 붙인다.
+    // 기존 동적 열은 다음 파일에 없더라도 그대로 유지한다.
     ensureOrderImportColumns_(csvFiles);
  
     // ---------- 주문 시트 준비 ----------
@@ -118,8 +121,10 @@ function parseCsvFile_(file, 주문, c품목별, 기존키) {
   var 매핑 = [];
   for (var c = 0; c < csvHeader.length; c++) {
     var name = String(csvHeader[c] || '').replace(/^\uFEFF/, '').trim();
-    if (!name) { 매핑.push(-1); continue; }
-    매핑.push(col_(주문, name, false));
+    if (!name) { 매핑.push({ index: -1, canonical: false }); continue; }
+    var canonical = canonicalOrderHeader_(name);
+    매핑.push({ index: orderHeaderColumn_(주문, name),
+      canonical: !!canonical && normKey_(name) === normKey_(canonical) });
   }
  
   var rows = [], 중복 = 0, 오류 = 0, 주문번호 = [];
@@ -129,9 +134,16 @@ function parseCsvFile_(file, 주문, c품목별, 기존키) {
     var src = parsed[i];
     if (!src.join('').trim()) continue;
  
-    var row = new Array(주문.width).fill('');
+    var row = new Array(주문.width).fill(''), canonicalWritten = {};
     for (var j = 0; j < src.length && j < 매핑.length; j++) {
-      if (매핑[j] >= 0) row[매핑[j]] = src[j];
+      var target = 매핑[j].index;
+      if (target < 0) continue;
+      if (매핑[j].canonical) {
+        if (!isBlank_(src[j])) { row[target] = src[j]; canonicalWritten[target] = true; }
+        else if (isBlank_(row[target])) row[target] = src[j];
+      } else if (!canonicalWritten[target] && isBlank_(row[target])) {
+        row[target] = src[j];
+      }
     }
  
     var key = toStr_(row[c품목별]);
@@ -181,8 +193,29 @@ function ensureOrderImportColumns_(files) {
   });
   if (!headers.length) return [];
   var order = readTable_(ROLE.주문);
-  return ensureColumns_(order.sheet, order.headers, headers.filter(function (name) {
-    return col_(order, name, false) < 0;
-  }));
+  return ensureColumns_(order.sheet, order.headers, normalizeOrderImportHeaders_(headers, order.headers));
+}
+
+/** 원본 고정/별칭 헤더는 표준 열로 매핑하고, 관찰된 진짜 추가 헤더만 반환한다. */
+function normalizeOrderImportHeaders_(sourceHeaders, existingHeaders) {
+  var existing = {};
+  (existingHeaders || []).forEach(function (header) { existing[normKey_(header)] = true; });
+  var added = {}, extras = [];
+  (sourceHeaders || []).forEach(function (header) {
+    var name = String(header || '').replace(/^\uFEFF/, '').trim();
+    if (!name || canonicalOrderHeader_(name)) return;
+    var key = normKey_(name);
+    if (existing[key] || added[key]) return;
+    added[key] = true;
+    extras.push(name);
+  });
+  return extras;
+}
+
+/** CSV 헤더를 고정 열 별칭 또는 정확히 같은 동적 열에 연결한다. */
+function orderHeaderColumn_(table, sourceHeader) {
+  var target = canonicalOrderHeader_(sourceHeader) || toStr_(sourceHeader);
+  var index = table.headerIndex[normKey_(target)];
+  return index === undefined ? -1 : index;
 }
  
