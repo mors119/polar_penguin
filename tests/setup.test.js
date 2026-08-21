@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const rootPath = path.resolve(__dirname, '..');
 const context = vm.createContext({ console });
-for (const file of ['S0 공통.js', 'S0 자동설치.js', 'S0 설치.js']) {
+for (const file of ['S0 공통.js', 'S0 자동설치.js', 'D 대시보드.js', 'S0 설치.js']) {
   vm.runInContext(fs.readFileSync(path.join(rootPath, 'src', file), 'utf8'), context);
 }
 
@@ -219,7 +219,19 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   };
   context.writeOpLog_ = () => {};
   context.alert_ = () => {};
-  context.D0_대시보드전체갱신 = () => { dashboardRefreshes++; return '✅ all'; };
+  context.Utilities = { formatDate: () => '2026-08-21 10:00:00' };
+  context.tz_ = () => 'Asia/Seoul';
+  context.D0_대시보드전체갱신 = () => {
+    dashboardRefreshes++;
+    const ss = spreadsheets.get(properties.get('OPERATION_SPREADSHEET_ID'));
+    context.renderIntegratedDashboard_(ss,
+      { 전체: 0, 출고완료: 0, 취소: 0, 예약전체: 0, 예약수량: 0, 예약출고가능: 0,
+        예약출고가능SKU: 0, 예약부족: 0, 권고: { 제목: '정상 운영', 내용: ['확인'], 색: 'FFFFFF' } },
+      { 부족: [], 품절: 0, 음수허용: 0, 위치미지정: 0, 예약부족SKU: [], 총가용: 0 },
+      { 작업대상주문: 0, 오늘지시: 0, 오늘출고수량: 0, kpi: { 출력오류: 0 } },
+      { latestTime: '기록 없음', latestResult: '기록 없음', warning: '없음', recentErrors: [], lastBackup: '백업 없음' });
+    return '✅ all';
+  };
 
   const first = context.setupSystem();
   assert.equal(properties.get('ROOT_FOLDER_ID'), root.getId());
@@ -252,6 +264,8 @@ test('setupSystem creates exactly one operational spreadsheet, reruns safely, re
   assert.ok(validationLists.some((values) => values[0] === 'EMAIL'));
   assert.ok(validationLists.some((values) => values[0] === 'FORMULA' && values[1].includes('MOD(C')));
   assert.equal(operationSs.getSheetByName('📖 안내').getRange(1, 2).getValue(), 'Polar Penguin');
+  assert.equal(operationSs.getSheetByName('📊 대시보드').getRange(1, 1).getValue(),
+    '📊  Polar Penguin 통합 대시보드');
   assert.match(operationSs.getSheetByName('📖 안내').getRange(5, 3).getValue(), /Input 폴더/);
   assert.ok(operationSs.getSheetByName('📖 안내').getDataRange().getValues()
     .some(row => String(row[1] || '').includes('⚙ 관리')));
