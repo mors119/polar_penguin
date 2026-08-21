@@ -28,6 +28,16 @@ function getReservationProductSummary_() {
   return reservationSkuSummaries_(readReservationSnapshot_(), true);
 }
 
+/** HtmlService에서 호출하는 공개 RPC */
+function getReservationProductSummary() {
+  return getReservationProductSummary_();
+}
+
+/** HtmlService / 외부 호출 호환 공개 RPC */
+function getReservationInboundSummary() {
+  return getReservationProductSummary_();
+}
+
 function reservationSkuSummaries_(snapshot, fOnly) {
   var summaries = [], skus = {};
   if (fOnly) {
@@ -73,8 +83,18 @@ function getReservationInboundPreview_(sku, inboundQty) {
   return buildReservationInboundPreview_(sku, qty, snapshot);
 }
 
+/** HtmlService에서 호출하는 공개 RPC */
+function getReservationInboundPreview(sku, inboundQty) {
+  return getReservationInboundPreview_(sku, inboundQty);
+}
+
 /** 이전 내부 호출자의 읽기 전용 미리보기 호환용. */
 function getReservationProductPreview_(sku) { return getReservationInboundPreview_(sku, 0); }
+
+/** HtmlService / 외부 호출 호환 공개 RPC */
+function getReservationProductPreview(sku) {
+  return getReservationInboundPreview_(sku, 0);
+}
 
 function buildReservationInboundPreview_(sku, inboundQty, snapshot) {
   var orders = reservationOrdersForSku_(snapshot.orders, sku);
@@ -371,6 +391,12 @@ function validateReservationInboundRequestId_(requestId) {
 
 function applyManualReservationInbound(sku, inboundQty, requestId) {
   return applyManualReservationInbound_(sku, inboundQty, requestId);
+}
+
+/** HtmlService 단일 객체 인자 호환용 */
+function submitReservationInbound(payload) {
+  payload = payload || {};
+  return applyManualReservationInbound_(payload.sku, payload.inboundQuantity !== undefined ? payload.inboundQuantity : payload.inboundQty, payload.requestId);
 }
 
 function applyManualReservationInbound_(sku, inboundQty, requestId) {

@@ -314,3 +314,8 @@ function executeCancellationScope_(payload) {
 function executeCancellationScope(payload) {
   return executeCancellationScope_(payload);
 }
+
+/** HtmlService / 외부 호출 호환 공개 RPC */
+function executeCancellation(payload) {
+  return executeCancellationScope_(payload);
+}

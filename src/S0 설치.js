@@ -439,7 +439,7 @@ function onOpen(e) {
 function 설정_열기() {
   var ss = consoleSS_(), sheet = ss.getSheetByName(CONSOLE.설정);
   if (!sheet) {
-    alert_('설정 탭이 없습니다. ⚙ 관리 → 시스템 설치 / 복구를 실행하세요.');
+    alert_('설정 시트를 찾을 수 없습니다.\n⚙ 관리 → 시스템 설치 / 복구를 실행하세요.');
     return null;
   }
 
