@@ -113,10 +113,14 @@ function calculateReservationBatch_(targetSku, targetAvailable, inventory, order
   }
   targetSku = String(targetSku || '').trim();
   var targetRemaining = Math.max(0, Number(targetAvailable) || 0);
-  var remaining = {}, selected = [], waiting = [], stopped = false;
+  var remaining = {}, physicalRemaining = {}, selected = [], waiting = [], stopped = false;
   Object.keys(inventory || {}).forEach(function (sku) {
     remaining[sku] = Number(inventory[sku].available) || 0;
+    if (inventory[sku].managed === false) {
+      physicalRemaining[sku] = Math.max(0, Number(inventory[sku].physicalAvailable) || 0);
+    }
   });
+  physicalRemaining[targetSku] = targetRemaining;
   var candidates = (orders || []).filter(function (order) {
     return order && order.required && Number(order.required[targetSku]) > 0;
   }).slice().sort(compareReservationOrders_);
@@ -137,36 +141,41 @@ function calculateReservationBatch_(targetSku, targetAvailable, inventory, order
     }
 
     var otherShortages = [], shortageDetails = [];
-    if (!order.committed) {
-      Object.keys(order.required).sort().forEach(function (sku) {
-        if (sku === targetSku) return;
-        var required = Number(order.required[sku]) || 0, item = inventory[sku];
-        if (!item) {
-          otherShortages.push(sku + ' 미등록'); shortageDetails.push({ sku: sku, type: 'MISSING' });
-        } else if (item.managed !== false && (remaining[sku] || 0) < required) {
-          otherShortages.push(sku + ' 필요 ' + required + ' / 가용 ' + (remaining[sku] || 0));
-          shortageDetails.push({ sku: sku, required: required, available: remaining[sku] || 0, type: 'OTHER' });
-        }
-      });
-    }
+    Object.keys(order.required).sort().forEach(function (sku) {
+      if (sku === targetSku) return;
+      var required = Number(order.required[sku]) || 0, item = inventory[sku];
+      if (!item) {
+        otherShortages.push(sku + ' 미등록'); shortageDetails.push({ sku: sku, type: 'MISSING' });
+      } else if (item.managed === false && (physicalRemaining[sku] || 0) < required) {
+        otherShortages.push(sku + ' 실물 필요 ' + required + ' / 확보 ' + (physicalRemaining[sku] || 0));
+        shortageDetails.push({ sku: sku, required: required, available: physicalRemaining[sku] || 0, type: 'OTHER_PHYSICAL' });
+      } else if (!order.committed && item.managed !== false && (remaining[sku] || 0) < required) {
+        otherShortages.push(sku + ' 필요 ' + required + ' / 가용 ' + (remaining[sku] || 0));
+        shortageDetails.push({ sku: sku, required: required, available: remaining[sku] || 0, type: 'OTHER' });
+      }
+    });
     if (otherShortages.length) {
       waiting.push(reservationWait_(order, targetRequired, '다른 상품 재고 부족: ' + otherShortages.join(', '), shortageDetails));
+      stopped = true;
       return;
     }
 
     targetRemaining -= targetRequired;
-    if (!order.committed) {
-      Object.keys(order.required).forEach(function (sku) {
-        if (sku !== targetSku) remaining[sku] = (remaining[sku] || 0) - (Number(order.required[sku]) || 0);
-      });
-    }
+    Object.keys(order.required).forEach(function (sku) {
+      if (sku === targetSku) return;
+      var required = Number(order.required[sku]) || 0, item = inventory[sku];
+      if (item && item.managed === false) physicalRemaining[sku] = (physicalRemaining[sku] || 0) - required;
+      else if (!order.committed) remaining[sku] = (remaining[sku] || 0) - required;
+    });
     selected.push({ orderNo: order.orderNo, orderDate: order.orderDate, itemOrderNo: order.itemOrderNo,
       targetQuantity: targetRequired, totalQuantity: sumRequired_(order.required), committed: !!order.committed,
       required: copyNumberMap_(order.required), recipient: order.recipient || '' });
   });
   remaining[targetSku] = targetRemaining;
+  physicalRemaining[targetSku] = targetRemaining;
   return {
     targetSku: targetSku, selected: selected, waiting: waiting, remaining: remaining,
+    physicalRemaining: physicalRemaining,
     targetAllocated: selected.reduce(function (sum, order) { return sum + order.targetQuantity; }, 0),
     totalAllocated: selected.reduce(function (sum, order) { return sum + order.totalQuantity; }, 0),
     unusedTargetQuantity: targetRemaining
@@ -257,20 +266,42 @@ function readReservationSnapshot_() {
   Object.keys(grouped).forEach(function (no) {
     Object.keys(grouped[no].required).forEach(function (sku) { candidateSkus[sku] = true; });
   });
-  return { orders: Object.keys(grouped).map(function (no) { return grouped[no]; }),
+  var snapshot = { orders: Object.keys(grouped).map(function (no) { return grouped[no]; }),
     inventory: inventory, candidateSkus: candidateSkus };
+  Object.keys(inventory).forEach(function (sku) {
+    if (inventory[sku].managed === false) inventory[sku].physicalAvailable = deriveReservationPhysicalStock_(sku, snapshot);
+  });
+  return snapshot;
 }
 
-function deriveReservationPhysicalStock_(sku, snapshot) {
+function deriveReservationPhysicalStockFromNet_(sku, snapshot) {
   var product = snapshot.inventory[sku];
   if (!product) return 0;
   var confirmedWaitingDemand = reservationOrdersForSku_(snapshot.orders, sku).reduce(function (sum, order) {
     return sum + (order.committed ? Number(order.required[sku]) || 0 : 0);
   }, 0);
-  var derived = Math.max(0, product.available + confirmedWaitingDemand);
+  return Math.max(0, product.available + confirmedWaitingDemand);
+}
+
+function deriveReservationPhysicalStock_(sku, snapshot) {
+  var derived = deriveReservationPhysicalStockFromNet_(sku, snapshot);
   // 순 재고와 현재 FIFO 행이 과거 데이터 때문에 완전히 맞지 않아도, 이전 release에서
   // 명시적으로 남긴 실물 수량은 잃지 않는다. Spreadsheet 열은 추가하지 않는다.
   return Math.max(derived, readReservationPhysicalCarry_(sku));
+}
+
+/** 카페24 물리 snapshot은 기존 carry보다 우선하는 현재 창고 사실이다. */
+function synchronizeReservationPhysicalCarryFromSnapshot_(skus) {
+  var snapshot = readReservationSnapshot_(), result = {};
+  Object.keys(skus || {}).forEach(function (sku) {
+    var product = snapshot.inventory[sku];
+    var quantity = product && product.managed === false
+      ? deriveReservationPhysicalStockFromNet_(sku, snapshot) : 0;
+    writeReservationPhysicalCarry_(sku, quantity);
+    result[sku] = quantity;
+    if (product && product.managed === false) product.physicalAvailable = quantity;
+  });
+  return result;
 }
 
 function readReservationPhysicalCarry_(sku) {
@@ -468,12 +499,12 @@ function releaseReservationQueueCore_(sku, releasableQty, options) {
     if (!picking.지시번호) throw new Error('피킹 헤더/라인을 만들지 못했습니다.');
   } catch (pickingError) {
     rollbackStockCommitment_(newlyCommitted);
-    writeReservationPhysicalCarry_(sku, effective);
     throw pickingError;
   }
 
-  // 피킹지시가 확보한 수량은 carry에서 제외하고, FIFO로 막힌 실물만 다음 이벤트에 넘긴다.
-  writeReservationPhysicalCarry_(sku, preview.unusedSecuredQuantity);
+  // 피킹지시가 확보한 모든 F 상품 수량을 carry에서 제외한다. target 외 F 상품도
+  // 같은 전체 주문에 포함될 수 있으므로 함께 갱신해야 다음 release가 중복 배정하지 않는다.
+  writeReservationBatchCarries_(snapshot, preview);
 
   var pdf;
   try {
@@ -507,7 +538,21 @@ function buildReservationReleasePreview_(sku, releasableQty, snapshot) {
     reservationOrderCount: orders.length, reservationQuantity: reservationQuantityForSku_(orders, sku),
     releaseOrderCount: calculated.selected.length, releaseQuantity: calculated.targetAllocated,
     totalPickingQuantity: calculated.totalAllocated, unusedSecuredQuantity: calculated.unusedTargetQuantity,
-    selected: calculated.selected, waiting: calculated.waiting };
+    selected: calculated.selected, waiting: calculated.waiting,
+    physicalRemaining: calculated.physicalRemaining };
+}
+
+function writeReservationBatchCarries_(snapshot, preview) {
+  var affected = {}; affected[preview.sku] = true;
+  preview.selected.forEach(function (order) {
+    Object.keys(order.required || {}).forEach(function (sku) {
+      if (snapshot.inventory[sku] && snapshot.inventory[sku].managed === false) affected[sku] = true;
+    });
+  });
+  Object.keys(affected).forEach(function (sku) {
+    var remaining = preview.physicalRemaining && preview.physicalRemaining[sku];
+    writeReservationPhysicalCarry_(sku, Math.max(0, Number(remaining) || 0));
+  });
 }
 
 function writeReservationReleaseLog_(sku, source, preview, outcome, instructionNo) {

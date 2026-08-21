@@ -89,7 +89,7 @@ test('onOpen registers the current menu and every handler exists in source', () 
     assert.equal(handlers.includes(internal), false, `${internal} must stay out of the operator menu`);
   }
   for (const expected of ['Input 지금 처리', '피킹지시서 조회 / 재출력', '위치 미지정 상품',
-    '선택 주문 취소', '예약 주문 피킹 관리', '대시보드 갱신', '시스템 상태 확인',
+    '선택 주문 취소', '예약상품 입고 관리', '대시보드 갱신', '시스템 상태 확인',
     '시스템 설치 / 복구', '설정', '백업 및 정리', '로그 정리']) {
     assert.ok(labels.includes(expected), `${expected} is missing from the operator menu`);
   }
@@ -101,6 +101,12 @@ test('onOpen registers the current menu and every handler exists in source', () 
   const allSource = fs.readdirSync(path.join(rootPath, 'src')).filter((name) => name.endsWith('.js'))
     .map((name) => fs.readFileSync(path.join(rootPath, 'src', name), 'utf8')).join('\n');
   assert.match(allSource, /⚠ 알림이메일 미설정/);
+  assert.doesNotMatch(allSource, /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
+    'runtime source must not contain a hard-coded notification recipient');
+  for (const variable of ['CONSOLE_SS_ID', 'DEFAULT_FOLDER_ID']) {
+    const assignment = allSource.match(new RegExp(`\\b${variable}\\s*=\\s*['\"]([^'\"]*)['\"]`));
+    assert.ok(assignment && assignment[1] === '', `${variable} must not embed an environment-specific Drive ID`);
+  }
   for (const handler of handlers) {
     assert.match(allSource, new RegExp(`function\\s+${handler.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}\\s*\\(`));
   }

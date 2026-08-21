@@ -209,6 +209,18 @@ function cancellationOrderPreview_(order) {
   };
 }
 
+function cancellationSummary_(orders) {
+  var summary = { orderCount: orders.length, totalQuantity: 0, waitingOrderCount: 0,
+    completedOrderCount: 0, cancelledOrderCount: 0, orders: orders.map(cancellationOrderPreview_) };
+  orders.forEach(function (order) {
+    summary.totalQuantity += order.totalQuantity;
+    if (order.state === ENUM.주문상태.출고완료) summary.completedOrderCount++;
+    else if (order.state === ENUM.주문상태.취소) summary.cancelledOrderCount++;
+    else summary.waitingOrderCount++;
+  });
+  return summary;
+}
+
 function cancellationContextFromTable_(table, orderNo) {
   orderNo = toStr_(orderNo);
   var grouped = cancellationOrdersFromTable_(table), selected = grouped.byNo[orderNo];
@@ -221,19 +233,15 @@ function cancellationContextFromTable_(table, orderNo) {
   var selectedActive = selected.state !== ENUM.주문상태.취소;
   var safeSelected = cancellationOrderPreview_(selected);
   var safeRelated = related.map(cancellationOrderPreview_);
-  var single = {
-    orderCount: 1,
-    totalQuantity: selected.totalQuantity,
-    orders: [safeSelected]
-  };
-  var bulkQuantity = related.reduce(function (sum, order) { return sum + order.totalQuantity; }, 0);
+  var single = cancellationSummary_([selected]);
+  var bulk = cancellationSummary_(related);
   return {
     selectedOrderNo: orderNo,
     selectedOrder: safeSelected,
     recipient: { name: selected.recipientName, phoneMasked: selected.phoneMasked },
     singleSummary: single,
     relatedOrders: safeRelated,
-    bulkSummary: { orderCount: related.length, totalQuantity: bulkQuantity, orders: safeRelated },
+    bulkSummary: bulk,
     bulkAvailable: selectedActive && related.length >= 2,
     phoneAvailable: phoneAvailable,
     note: phoneAvailable ? '' : '수령인 휴대전화가 없어 동일 수령인 주문 전체 취소를 제공하지 않습니다.',
@@ -271,11 +279,17 @@ function executeCancellationScope_(payload) {
       ? [selectedOrderNo]
       : context.relatedOrders.map(function (order) { return order.orderNo; });
     if (!targets.length) targets = [selectedOrderNo];
+    var selectedSummary = scope === 'SINGLE' ? context.singleSummary : context.bulkSummary;
+    if (selectedSummary.completedOrderCount > 0 && payload.confirmCompleted !== true) {
+      throw new Error('출고완료 주문 ' + selectedSummary.completedOrderCount + '건의 재고 복원 확인이 필요합니다. 취소 대상을 다시 확인하세요.');
+    }
     var source = scope === 'SINGLE' ? 'MENU_SINGLE_CANCEL' : 'MENU_RECIPIENT_BULK_CANCEL';
     var summary = { requested: targets.length, success: 0, alreadyCancelled: 0, failed: [], restoredQuantity: 0 };
     targets.forEach(function (orderNo) {
       try {
-        var result = cancelOrder_(orderNo, reason, source, { confirmReturn: true, refresh: false });
+        var result = cancelOrder_(orderNo, reason, source, {
+          confirmReturn: payload.confirmCompleted === true, refresh: false
+        });
         if (result.취소) {
           summary.success++;
           summary.restoredQuantity += toNum_(result.복원수량);

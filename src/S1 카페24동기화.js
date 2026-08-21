@@ -221,6 +221,12 @@ function S1_1_카페24재고동기화(입력파일, silent) {
 
     writeStockLog_(로그);
 
+    // 카페24 값은 권위 있는 물리 snapshot이다. 수동 입고 release에서 남긴 carry가
+    // 더 크더라도 snapshot 이후까지 살아 이중 배정되지 않도록 현재 값으로 재조정한다.
+    if (typeof synchronizeReservationPhysicalCarryFromSnapshot_ === 'function') {
+      synchronizeReservationPhysicalCarryFromSnapshot_(CSV코드);
+    }
+
     // ---------- 보고 ----------
     var msg = '카페24 재고 동기화 완료\n파일: ' + 대상.getName() + '\n\n' +
       '신규 등록 ' + 요약.신규 + '건 / 갱신 ' + 요약.갱신 + '건 / 재고 변동 ' + 요약.재고변동 + '건';

@@ -67,6 +67,8 @@ test('context groups unique order numbers by normalized recipient and phone and 
   assert.equal(result.singleSummary.orders[0].items.length, 2);
   assert.equal(result.bulkSummary.orderCount, 3);
   assert.equal(result.bulkSummary.totalQuantity, 10);
+  assert.equal(result.bulkSummary.waitingOrderCount, 2);
+  assert.equal(result.bulkSummary.completedOrderCount, 1);
   assert.equal(result.hasCompletedBulk, true);
 });
 
@@ -115,7 +117,8 @@ test('bulk execution re-derives targets, ignores a browser order list, and repor
   };
 
   const result = context.executeCancellationScope_({
-    selectedOrderNo: 'A001', scope: 'RECIPIENT', reason: '고객 요청', targetOrderNos: ['B001']
+    selectedOrderNo: 'A001', scope: 'RECIPIENT', reason: '고객 요청', confirmCompleted: true,
+    targetOrderNos: ['B001']
   });
   assert.deepEqual(calls.map(call => call.orderNo), ['A001', 'A002', 'A003']);
   assert.ok(calls.every(call => call.source === 'MENU_RECIPIENT_BULK_CANCEL'));
@@ -126,6 +129,29 @@ test('bulk execution re-derives targets, ignores a browser order list, and repor
   assert.equal(result.failed.length, 1);
   assert.equal(result.restoredQuantity, 5);
   assert.equal(refreshes, 1);
+  context.cancelOrder_ = centralCancelOrder;
+});
+
+test('mixed waiting and completed bulk cancellation requires server-visible restoration confirmation', () => {
+  const orders = table(context.ROLE.주문, orderHeaders, [
+    orderRow('A001', 'A001-1', 'SKU-A', '상품 A', 2, '예약', '홍길동', '010-1111-2222'),
+    orderRow('A002', 'A002-1', 'SKU-B', '상품 B', 3, '출고완료', '홍길동', '01011112222')
+  ]);
+  install({ [context.ROLE.주문]: orders });
+  const calls = [];
+  context.cancelOrder_ = (orderNo, reason, source, options) => {
+    calls.push({ orderNo, options }); return { 취소: true, 복원수량: 0 };
+  };
+  assert.throws(() => context.executeCancellationScope_({
+    selectedOrderNo: 'A001', scope: 'RECIPIENT', reason: '고객 요청'
+  }), /재고 복원 확인이 필요/);
+  assert.equal(calls.length, 0, 'confirmation failure must happen before any order mutation');
+
+  const result = context.executeCancellationScope_({
+    selectedOrderNo: 'A001', scope: 'RECIPIENT', reason: '고객 요청', confirmCompleted: true
+  });
+  assert.equal(result.success, 2);
+  assert.ok(calls.every(call => call.options.confirmReturn === true));
   context.cancelOrder_ = centralCancelOrder;
 });
 

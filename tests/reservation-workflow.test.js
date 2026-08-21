@@ -6,12 +6,13 @@ const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const context = vm.createContext({ console });
-for (const file of ['S0 공통.js', 'S3 주문확정.js', 'S8 예약관리.js']) {
+for (const file of ['S0 공통.js', 'S3 주문확정.js', 'S7 주문취소.js', 'S8 예약관리.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, 'src', file), 'utf8'), context);
 }
 const originalReadReservationSnapshot = context.readReservationSnapshot_;
 const originalReadReservationPhysicalCarry = context.readReservationPhysicalCarry_;
 const originalWriteReservationPhysicalCarry = context.writeReservationPhysicalCarry_;
+const originalReleaseReservationQueueCore = context.releaseReservationQueueCore_;
 const plain = value => JSON.parse(JSON.stringify(value));
 const inventory = values => Object.fromEntries(Object.entries(values).map(([sku, available]) =>
   [sku, { available, name: sku, option: '', managed: true }]));
@@ -108,13 +109,14 @@ test('manual inbound quantity validation accepts only nonnegative integers', () 
   }
 });
 
-test('other-SKU shortage is skipped without consuming target stock', () => {
+test('other-SKU shortage stops FIFO without consuming target stock or allowing leapfrog', () => {
   const result = context.calculateReservationBatch_('BOOK', inventory({ BOOK: 10, B: 0 }), [
     order('A001', '2026-08-01', { BOOK: 2, B: 1 }), order('A002', '2026-08-02', { BOOK: 2 })
   ]);
-  assert.deepEqual(plain(result.selected.map(item => item.orderNo)), ['A002']);
-  assert.equal(result.remaining.BOOK, 8);
+  assert.deepEqual(plain(result.selected.map(item => item.orderNo)), []);
+  assert.equal(result.remaining.BOOK, 10);
   assert.match(result.waiting[0].reason, /다른 상품 재고 부족: B 필요 1 \/ 가용 0/);
+  assert.match(result.waiting[1].reason, /FIFO 대기/);
 });
 
 test('batch allocation consumes shared secondary inventory cumulatively', () => {
@@ -144,6 +146,55 @@ test('an order with multiple waiting SKUs releases only when every managed SKU i
   ]);
   assert.deepEqual(plain(released.selected.map(item => item.orderNo)), ['A001']);
   assert.equal(released.totalAllocated, 3);
+});
+
+test('committed multi-F order requires and consumes physical stock for every F SKU', () => {
+  const stock = {
+    BOOK: { available: -5, name: '책', managed: false, physicalAvailable: 5 },
+    BONUS: { available: -1, name: '특전', managed: false, physicalAvailable: 0 }
+  };
+  const waiting = [{ ...order('A001', '2026-08-01', { BOOK: 2, BONUS: 1 }), committed: true },
+    { ...order('A002', '2026-08-02', { BOOK: 1 }), committed: true }];
+  const blocked = context.calculateReservationBatch_('BOOK', 5, stock, waiting);
+  assert.equal(blocked.selected.length, 0);
+  assert.match(blocked.waiting[0].reason, /BONUS 실물 필요 1 \/ 확보 0/);
+  assert.match(blocked.waiting[1].reason, /FIFO 대기/);
+
+  stock.BONUS.physicalAvailable = 1;
+  const released = context.calculateReservationBatch_('BOOK', 5, stock, waiting);
+  assert.deepEqual(plain(released.selected.map(item => item.orderNo)), ['A001', 'A002']);
+  assert.equal(released.physicalRemaining.BOOK, 2);
+  assert.equal(released.physicalRemaining.BONUS, 0);
+});
+
+test('reservation release carry update consumes target and secondary F stock exactly once', () => {
+  const writes = {};
+  context.writeReservationPhysicalCarry_ = (sku, quantity) => { writes[sku] = quantity; };
+  context.writeReservationBatchCarries_({ inventory: {
+    BOOK: { managed: false }, BONUS: { managed: false }, NORMAL: { managed: true }
+  } }, {
+    sku: 'BOOK', physicalRemaining: { BOOK: 3, BONUS: 0 },
+    selected: [{ required: { BOOK: 7, BONUS: 1, NORMAL: 2 } }]
+  });
+  assert.deepEqual(writes, { BOOK: 3, BONUS: 0 });
+  context.writeReservationPhysicalCarry_ = originalWriteReservationPhysicalCarry;
+});
+
+test('authoritative inventory snapshot replaces stale physical carry', () => {
+  const props = new Map([[`${context.RESERVATION_PHYSICAL_CARRY_PREFIX}BOOK`, '9']]);
+  context.PropertiesService = { getScriptProperties: () => ({
+    getProperty: key => props.get(key) || null,
+    setProperty: (key, value) => props.set(key, value),
+    deleteProperty: key => props.delete(key)
+  }) };
+  context.readReservationSnapshot_ = () => ({
+    inventory: { BOOK: { available: -3, name: '책', managed: false } },
+    orders: [{ ...order('A001', '2026-08-01', { BOOK: 5 }), committed: true }]
+  });
+  const result = context.synchronizeReservationPhysicalCarryFromSnapshot_({ BOOK: true });
+  assert.equal(result.BOOK, 2);
+  assert.equal(props.get(`${context.RESERVATION_PHYSICAL_CARRY_PREFIX}BOOK`), '2');
+  context.readReservationSnapshot_ = originalReadReservationSnapshot;
 });
 
 function table(role, headers, rows) {
@@ -329,4 +380,66 @@ test('PDF-stage failure preserves inbound idempotency and a recoverable instruct
   assert.equal(logs.length, 1);
   assert.equal(retry.duplicate, true);
   assert.equal(retry.instructionNo, 'PK-RES-ERROR-1');
+  context.releaseReservationQueueCore_ = originalReleaseReservationQueueCore;
+});
+
+test('F-order inbound through output and cancellation preserves single-stock accounting', () => {
+  const tables = {
+    [context.ROLE.주문]: table(context.ROLE.주문,
+      ['주문번호', '품목별 주문번호', '상품품목코드', '주문상품명(기본)', '상품옵션(기본)', '수량',
+        '주문상태', '출고완료', '취소사유', '취소일시', '취소경로', '확정일시', '대기사유',
+        '피킹지시번호', '수령인', '수령인 휴대전화'],
+      [['A001', 'A001-1', 'BOOK', '책', '', 4, '예약', 0, '', '', '', new Date(), '', '',
+        '홍길동', '010-1111-2222']]),
+    [context.ROLE.마스터]: table(context.ROLE.마스터,
+      ['상품품목코드', '상품명', '옵션명', '가용재고', '재고관리'], [['BOOK', '책', '', -4, 'F']]),
+    [context.ROLE.헤더]: table(context.ROLE.헤더,
+      ['피킹지시번호', '주문번호', '상태'], []),
+    [context.ROLE.라인]: table(context.ROLE.라인,
+      ['주문번호', '품목별 주문번호', '피킹지시번호', '실제수량', '라인상태', '처리일시'], [])
+  };
+  const props = new Map(), stockLogs = [];
+  context.getConfig_ = () => ({ 별칭: {} });
+  context.readTable_ = role => tables[role];
+  context.readReservationSnapshot_ = originalReadReservationSnapshot;
+  context.readReservationPhysicalCarry_ = originalReadReservationPhysicalCarry;
+  context.writeReservationPhysicalCarry_ = originalWriteReservationPhysicalCarry;
+  context.PropertiesService = { getScriptProperties: () => ({
+    getProperty: key => props.get(key) || null,
+    setProperty: (key, value) => props.set(key, value),
+    deleteProperty: key => props.delete(key)
+  }) };
+  context.withLock_ = fn => fn();
+  context.writeColumn_ = () => {};
+  context.writeStockLog_ = entries => stockLogs.push(...entries);
+  context.writeOpLog_ = () => {};
+  context.사용자_ = () => 'tester';
+  context.inputFolder_ = () => ({});
+  context.D0_대시보드전체갱신 = () => {};
+  context.S4_1_피킹지시생성 = () => {
+    tables[context.ROLE.주문].rows[0][13] = 'PK-RES-1';
+    tables[context.ROLE.헤더].rows.push(['PK-RES-1', 'A001', '대기']);
+    tables[context.ROLE.라인].rows.push(['A001', 'A001-1', 'PK-RES-1', '', '미처리', '']);
+    return { 지시번호: 'PK-RES-1' };
+  };
+  context.S9_피킹PDF생성 = () => {
+    tables[context.ROLE.주문].rows[0][6] = '출고완료';
+    tables[context.ROLE.주문].rows[0][7] = 1;
+    tables[context.ROLE.헤더].rows[0][2] = '완료';
+    tables[context.ROLE.라인].rows[0][3] = 4;
+    tables[context.ROLE.라인].rows[0][4] = '완료';
+    return { 생성: true };
+  };
+
+  const inbound = context.applyManualReservationInboundCore_('BOOK', 4, 'request_cross_flow_1');
+  assert.equal(inbound.created, true);
+  assert.equal(tables[context.ROLE.마스터].rows[0][3], 0);
+  assert.equal(tables[context.ROLE.주문].rows[0][6], '출고완료');
+
+  const cancelled = context.cancelOrder_('A001', '고객 요청', 'TEST', { confirmReturn: true });
+  assert.equal(cancelled.복원수량, 4);
+  assert.equal(tables[context.ROLE.마스터].rows[0][3], 4);
+  assert.equal(context.cancelOrder_('A001', '고객 요청', 'TEST', { confirmReturn: true }).이미취소, true);
+  assert.equal(tables[context.ROLE.마스터].rows[0][3], 4, 'repeat cancellation must not restore twice');
+  assert.deepEqual(stockLogs.map(log => log.변동량), [4, 4]);
 });
